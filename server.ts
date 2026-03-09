@@ -13,6 +13,9 @@ import multer from "multer";
 import ffmpeg from "fluent-ffmpeg";
 import { spawn, ChildProcess, exec } from "child_process";
 import { promisify } from "util";
+import os from "os";
+import checkDiskSpace from "check-disk-space";
+import { GoogleGenAI } from "@google/genai";
 
 const execAsync = promisify(exec);
 
@@ -151,6 +154,19 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS metadata_slots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    day_of_week INTEGER, -- 0 (Sun) to 6 (Sat)
+    slot_index INTEGER,  -- 0 to 9 (0-4 morning, 5-9 afternoon)
+    title TEXT,
+    description TEXT,
+    thumbnail_url TEXT,
+    topic TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
 `);
 
 // --- Migrations ---
@@ -187,6 +203,7 @@ const migrate = () => {
       if (!columns.includes("repeat_date")) db.prepare("ALTER TABLE streams ADD COLUMN repeat_date INTEGER").run();
       if (!columns.includes("schedule_enabled")) db.prepare("ALTER TABLE streams ADD COLUMN schedule_enabled INTEGER DEFAULT 0").run();
       if (!columns.includes("last_triggered")) db.prepare("ALTER TABLE streams ADD COLUMN last_triggered TEXT").run();
+      if (!columns.includes("network_optimization")) db.prepare("ALTER TABLE streams ADD COLUMN network_optimization INTEGER DEFAULT 1").run();
     }
     if (table === "logs") {
       if (!columns.includes("username")) db.prepare("ALTER TABLE logs ADD COLUMN username TEXT").run();
@@ -349,17 +366,20 @@ class StreamManager {
     const rtmpDestination = `${stream.rtmp_url}/${stream.stream_key}`;
     const [width, height] = (stream.resolution || "1280x720").split("x");
     
+    // Network Optimization Flags
+    const useOptimization = stream.network_optimization !== 0;
+    
     const args = [
       "-re",
       ...loopFlag,
       ...inputArgs,
       "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
       "-c:v", "libx264",
-      "-preset", "ultrafast",
-      "-tune", "zerolatency",
+      "-preset", useOptimization ? "ultrafast" : "veryfast",
+      "-tune", useOptimization ? "zerolatency" : "main",
       "-b:v", `${stream.bitrate}k`,
       "-maxrate", `${stream.bitrate}k`,
-      "-bufsize", `${stream.bitrate * 2}k`,
+      "-bufsize", useOptimization ? `${stream.bitrate}k` : `${stream.bitrate * 2}k`,
       "-pix_fmt", "yuv420p",
       "-g", "60",
       "-c:a", "aac",
@@ -904,9 +924,6 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, (req, res) => {
 });
 
 // System Stats
-import os from "os";
-import checkDiskSpace from "check-disk-space";
-
 app.get("/api/system/time", requireAuth, (req, res) => {
   const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
   const tz = timezone ? timezone.value : "UTC";
@@ -945,7 +962,7 @@ app.get("/api/system/time", requireAuth, (req, res) => {
 });
 
 app.post("/api/system/settings", requireAuth, requireAdmin, (req, res) => {
-  const { timezone, theme_mode } = req.body;
+  const { timezone, theme_mode, gemini_api_key } = req.body;
   console.log(`Updating system settings: timezone=${timezone}, theme_mode=${theme_mode}`);
   
   if (timezone) {
@@ -958,6 +975,7 @@ app.post("/api/system/settings", requireAuth, requireAdmin, (req, res) => {
     }
   }
   if (theme_mode) db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('theme_mode', ?)").run(theme_mode);
+  if (gemini_api_key !== undefined) db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('gemini_api_key', ?)").run(gemini_api_key);
   
   res.json({ success: true });
 });
@@ -1172,6 +1190,101 @@ app.get("/api/system/stats", requireAuth, requireAdmin, async (req, res) => {
   };
 
   res.json(stats);
+});
+
+// AI Metadata Generator
+app.get("/api/metadata-slots", requireAuth, (req, res) => {
+  const slots = db.prepare("SELECT * FROM metadata_slots WHERE user_id = ? ORDER BY day_of_week ASC, slot_index ASC").all(req.session.user.id);
+  res.json(slots);
+});
+
+app.post("/api/metadata-slots/init", requireAuth, (req, res) => {
+  const userId = req.session.user.id;
+  const existing = db.prepare("SELECT count(*) as count FROM metadata_slots WHERE user_id = ?").get(userId) as any;
+  
+  if (existing.count === 0) {
+    const insert = db.prepare("INSERT INTO metadata_slots (user_id, day_of_week, slot_index, title, description) VALUES (?, ?, ?, ?, ?)");
+    db.transaction(() => {
+      for (let day = 0; day < 7; day++) {
+        for (let slot = 0; slot < 10; slot++) {
+          insert.run(userId, day, slot, `Slot ${day}-${slot}`, "Description will be generated here...");
+        }
+      }
+    })();
+  }
+  res.json({ success: true });
+});
+
+app.put("/api/metadata-slots/:id", requireAuth, (req, res) => {
+  const { title, description, topic, thumbnail_url } = req.body;
+  db.prepare("UPDATE metadata_slots SET title = ?, description = ?, topic = ?, thumbnail_url = ? WHERE id = ? AND user_id = ?")
+    .run(title, description, topic, thumbnail_url, req.params.id, req.session.user.id);
+  res.json({ success: true });
+});
+
+app.post("/api/metadata-slots/generate", requireAuth, async (req, res) => {
+  const { slotId, topic } = req.body;
+  if (!topic) return res.status(400).json({ error: "Topic is required" });
+
+  try {
+    // Get API Key from settings or env
+    const setting = db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get() as any;
+    const apiKey = setting?.value || process.env.GEMINI_API_KEY;
+    
+    if (!apiKey) {
+      return res.status(400).json({ error: "Gemini API Key is not configured. Please set it in Settings." });
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    
+    // Generate Text
+    const textResponse = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `Generate a catchy YouTube stream title and a detailed description for a live stream about: ${topic}. 
+      Return the result in JSON format with keys "title" and "description". 
+      The description should be engaging and include relevant keywords.`,
+      config: { responseMimeType: "application/json" }
+    });
+
+    const metadata = JSON.parse(textResponse.text || "{}");
+
+    // Generate Thumbnail (Optional - might fail due to quota)
+    let thumbnailUrl = "";
+    try {
+      const imageResponse = await ai.models.generateContent({
+        model: "gemini-2.5-flash-image",
+        contents: {
+          parts: [{ text: `A high-quality, vibrant YouTube thumbnail for a live stream about: ${topic}. No text on image, just high impact visual.` }]
+        },
+        config: {
+          imageConfig: { aspectRatio: "16:9" }
+        }
+      });
+
+      for (const part of imageResponse.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) {
+          const filename = `ai-thumb-${Date.now()}.png`;
+          const filepath = path.join(THUMBNAILS_DIR, filename);
+          fs.writeFileSync(filepath, Buffer.from(part.inlineData.data, "base64"));
+          thumbnailUrl = filename;
+          break;
+        }
+      }
+    } catch (imageError) {
+      console.error("Thumbnail generation failed (likely quota):", imageError);
+      // Continue without thumbnail if it fails
+    }
+
+    if (metadata.title) {
+      db.prepare("UPDATE metadata_slots SET title = ?, description = ?, topic = ?, thumbnail_url = ? WHERE id = ? AND user_id = ?")
+        .run(metadata.title, metadata.description, topic, thumbnailUrl, slotId, req.session.user.id);
+    }
+
+    res.json({ success: true, title: metadata.title, description: metadata.description, thumbnail_url: thumbnailUrl });
+  } catch (err: any) {
+    console.error("AI Generation failed:", err);
+    res.status(500).json({ error: "AI Generation failed: " + err.message });
+  }
 });
 
 // Serve static files
