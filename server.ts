@@ -980,12 +980,30 @@ app.get("/api/system/update-check", requireAuth, async (req, res) => {
   try {
     // 1. Ensure remote is set correctly and fetch latest
     try {
+      // Check if it's a git repo
+      let isGit = false;
       try {
-        await execAsync("git remote set-url origin https://github.com/acnudesign/SaungStream.git");
+        await execAsync("git rev-parse --is-inside-work-tree");
+        isGit = true;
       } catch (e) {
-        await execAsync("git remote add origin https://github.com/acnudesign/SaungStream.git");
+        try {
+          await execAsync("git init");
+          isGit = true;
+        } catch (initErr) {
+          console.error("Failed to initialize git:", initErr);
+        }
       }
-      await execAsync("git fetch origin main");
+
+      if (isGit) {
+        try {
+          await execAsync("git remote set-url origin https://github.com/acnudesign/SaungStream.git");
+        } catch (e) {
+          try {
+            await execAsync("git remote add origin https://github.com/acnudesign/SaungStream.git");
+          } catch (re) {}
+        }
+        await execAsync("git fetch origin main");
+      }
     } catch (e) {
       console.error("Fetch failed in update-check:", e);
     }
@@ -1022,7 +1040,7 @@ app.get("/api/system/update-check", requireAuth, async (req, res) => {
     res.json({ 
       currentVersion: currentHash,
       latestVersion: latestHash,
-      updateAvailable: currentHash !== latestHash && latestHash !== "unknown",
+      updateAvailable: latestHash !== "unknown" && (currentHash === "unknown" || currentHash !== latestHash),
       changelog: changelog,
       githubUrl: "https://github.com/acnudesign/SaungStream"
     });
@@ -1058,13 +1076,17 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
       // 1. Check if git is initialized and ensure remote is correct
       try {
         await execAsync("git rev-parse --is-inside-work-tree");
-        try {
-          await execAsync("git remote set-url origin https://github.com/acnudesign/SaungStream.git");
-        } catch (e) {
-          await execAsync("git remote add origin https://github.com/acnudesign/SaungStream.git");
-        }
       } catch (e) {
         await execAsync("git init");
+        try {
+          await execAsync("git config user.email 'update@saungstream.local'");
+          await execAsync("git config user.name 'Update Bot'");
+        } catch (cfgErr) {}
+      }
+
+      try {
+        await execAsync("git remote set-url origin https://github.com/acnudesign/SaungStream.git");
+      } catch (e) {
         try {
           await execAsync("git remote add origin https://github.com/acnudesign/SaungStream.git");
         } catch (re) {}
@@ -1103,7 +1125,11 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
 
       // 6. Reset to force update
       console.log("Resetting local state to match GitHub...");
-      await execAsync("git reset --hard origin/main");
+      try {
+        await execAsync("git checkout -B main origin/main");
+      } catch (e) {
+        await execAsync("git reset --hard origin/main");
+      }
       
       console.log("Update completed successfully. Restarting...");
       process.exit(0);
@@ -1225,6 +1251,30 @@ setInterval(() => {
         if (stream.repeat_date === currentDayOfMonth) {
           shouldStart = true;
         }
+      }
+    }
+
+    // Handle interval-based repetitions
+    if (!shouldStart && ["10min", "30min", "1hour", "6hours", "12hours"].includes(stream.repeat_type)) {
+      const intervalMap: any = { "10min": 10, "30min": 30, "1hour": 60, "6hours": 360, "12hours": 720 };
+      const interval = intervalMap[stream.repeat_type];
+      
+      try {
+        const [nowH, nowM] = currentTime.split(':').map(Number);
+        const [startH, startM] = stream.start_time.split(':').map(Number);
+        
+        const startDate = new Date(stream.start_date);
+        const currDate = new Date(currentDate);
+        const daysDiff = Math.round((currDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+        
+        if (daysDiff >= 0) {
+          const totalMinutesDiff = daysDiff * 1440 + (nowH * 60 + nowM) - (startH * 60 + startM);
+          if (totalMinutesDiff >= 0 && totalMinutesDiff % interval === 0) {
+            shouldStart = true;
+          }
+        }
+      } catch (e) {
+        console.error("Error calculating interval repetition:", e);
       }
     }
 
