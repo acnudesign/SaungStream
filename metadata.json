@@ -1,0 +1,5 @@
+{
+  "name": "Remix: SaungStream v3",
+  "description": "A self-hosted stream automation system for 24/7 RTMP broadcasting.",
+  "requestFramePermissions": []
+}
