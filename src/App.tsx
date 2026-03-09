@@ -1405,6 +1405,7 @@ const Playlists = () => {
 };
 
 const Streams = () => {
+  const { user } = useAuth();
   const [streams, setStreams] = useState([]);
   const [playlists, setPlaylists] = useState([]);
   const [media, setMedia] = useState([]);
@@ -1663,9 +1664,13 @@ const Streams = () => {
                       className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="-1">Infinite (Manual Stop)</option>
-                      <option value="0.083333">5 Minutes (Test)</option>
-                      <option value="0.25">15 Minutes (Test)</option>
-                      <option value="0.5">30 Minutes (Test)</option>
+                      {user?.role === 'admin' && (
+                        <>
+                          <option value="0.083333">5 Minutes (Test)</option>
+                          <option value="0.25">15 Minutes (Test)</option>
+                          <option value="0.5">30 Minutes (Test)</option>
+                        </>
+                      )}
                       {[...Array(24)].map((_, i) => (
                         <option key={i+1} value={i+1}>{i+1} Hour{i > 0 ? 's' : ''}</option>
                       ))}
@@ -1729,6 +1734,15 @@ const Streams = () => {
                       className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="none">Once (One Time)</option>
+                      {user?.role === 'admin' && (
+                        <>
+                          <option value="10min">Every 10 Minutes (Test)</option>
+                          <option value="30min">Every 30 Minutes (Test)</option>
+                        </>
+                      )}
+                      <option value="1hour">Every 1 Hour</option>
+                      <option value="6hours">Every 6 Hours</option>
+                      <option value="12hours">Every 12 Hours</option>
                       <option value="daily">Daily</option>
                       <option value="weekly">Weekly</option>
                       <option value="monthly">Monthly</option>
