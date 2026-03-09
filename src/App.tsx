@@ -38,6 +38,7 @@ import {
   RefreshCw,
   Search,
   Download,
+  Sparkles,
   Edit2,
   BookOpen,
   Maximize2,
@@ -308,6 +309,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     { to: "/media", icon: Film, label: "Media Library" },
     { to: "/playlists", icon: ListMusic, label: "Playlists" },
     { to: "/streams", icon: Radio, label: "Streams" },
+    { to: "/ai-metadata", icon: Sparkles, label: "AI Add-ons" },
     { to: "/guide", icon: BookOpen, label: "Guide" },
     { to: "/settings", icon: Settings, label: "Settings" },
   ];
@@ -2404,6 +2406,7 @@ const SettingsPage = () => {
   const [updating, setUpdating] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [timezone, setTimezone] = useState("UTC");
+  const [geminiApiKey, setGeminiApiKey] = useState("");
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -2411,6 +2414,7 @@ const SettingsPage = () => {
       if (res.ok) {
         const data = await res.json();
         if (data.timezone) setTimezone(data.timezone);
+        if (data.gemini_api_key) setGeminiApiKey(data.gemini_api_key);
       }
     };
     fetchSettings();
@@ -2443,7 +2447,7 @@ const SettingsPage = () => {
       const res = await fetch("/api/system/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ timezone })
+        body: JSON.stringify({ timezone, gemini_api_key: geminiApiKey })
       });
       if (res.ok) {
         alert("System settings saved");
@@ -2542,6 +2546,18 @@ const SettingsPage = () => {
                   <p className="text-xs text-slate-500 mt-1 italic">Pilih zona waktu sesuai lokasi Anda untuk penjadwalan yang akurat.</p>
                 </div>
 
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Gemini API Key</label>
+                  <input 
+                    type="password" 
+                    value={geminiApiKey}
+                    onChange={e => setGeminiApiKey(e.target.value)}
+                    placeholder="Enter your Gemini API Key"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  />
+                  <p className="text-xs text-slate-500 mt-1 italic">API Key ini digunakan untuk fitur AI Metadata Generator.</p>
+                </div>
+
                 <button 
                   onClick={saveSystemSettings}
                   disabled={updating}
@@ -2580,6 +2596,274 @@ const SettingsPage = () => {
   );
 };
 
+const AIMetadataPage = () => {
+  const [slots, setSlots] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState<number | null>(null);
+  const [activeDay, setActiveDay] = useState(new Date().getDay());
+  const [editingSlot, setEditingSlot] = useState<any>(null);
+  const [topics, setTopics] = useState<Record<number, string>>({});
+
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  const fetchSlots = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchJson("/api/metadata-slots", []);
+      if (data.length === 0) {
+        await fetch("/api/metadata-slots/init", { method: "POST" });
+        const retryData = await fetchJson("/api/metadata-slots", []);
+        setSlots(retryData);
+      } else {
+        setSlots(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch slots:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSlots();
+  }, []);
+
+  const handleGenerate = async (slotId: number, topic: string) => {
+    if (!topic) {
+      alert("Please enter a topic first");
+      return;
+    }
+    setGenerating(slotId);
+    try {
+      const res = await fetch("/api/metadata-slots/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slotId, topic })
+      });
+      if (res.ok) {
+        await fetchSlots();
+      } else {
+        const data = await res.json();
+        alert(data.error || "Generation failed");
+      }
+    } catch (err) {
+      console.error("Generation error:", err);
+    } finally {
+      setGenerating(null);
+    }
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`/api/metadata-slots/${editingSlot.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editingSlot)
+      });
+      if (res.ok) {
+        setEditingSlot(null);
+        await fetchSlots();
+      }
+    } catch (err) {
+      console.error("Save error:", err);
+    }
+  };
+
+  const filteredSlots = slots.filter(s => s.day_of_week === activeDay);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <RefreshCw className="animate-spin text-indigo-600" size={32} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-800 dark:text-white flex items-center gap-3">
+            <Sparkles className="text-indigo-600" />
+            AI Metadata Add-ons
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400">Manage 70 unique metadata slots for your weekly live stream cycle</p>
+        </div>
+      </header>
+
+      <div className="flex flex-wrap gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl w-fit">
+        {days.map((day, index) => (
+          <button
+            key={day}
+            onClick={() => setActiveDay(index)}
+            className={cn(
+              "px-6 py-2.5 rounded-xl text-sm font-bold transition-all",
+              activeDay === index 
+                ? "bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-sm" 
+                : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+            )}
+          >
+            {day}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {filteredSlots.map((slot) => (
+          <motion.div
+            key={slot.id}
+            layout
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all"
+          >
+            <div className="p-6">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <span className="inline-block px-2 py-1 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 text-[10px] font-black uppercase tracking-wider rounded-md mb-2">
+                    {slot.slot_index < 5 ? "Morning Slot" : "Afternoon Slot"} {slot.slot_index % 5 + 1}
+                  </span>
+                  <h3 className="text-lg font-bold text-slate-800 dark:text-white line-clamp-1">{slot.title}</h3>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(`Title: ${slot.title}\n\nDescription: ${slot.description}`);
+                      alert("Metadata copied to clipboard!");
+                    }}
+                    className="p-2 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all"
+                    title="Copy to clipboard"
+                  >
+                    <Plus size={18} className="rotate-45" />
+                  </button>
+                  <button
+                    onClick={() => setEditingSlot(slot)}
+                    className="p-2 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all"
+                  >
+                    <Edit2 size={18} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex gap-4 mb-4">
+                <div className="w-32 h-18 bg-slate-100 dark:bg-slate-800 rounded-lg overflow-hidden shrink-0 border border-slate-200 dark:border-slate-700">
+                  {slot.thumbnail_url ? (
+                    <img 
+                      src={`/thumbnails/${slot.thumbnail_url}`} 
+                      alt="Thumbnail" 
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-slate-400">
+                      <Palette size={24} />
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-3 italic">
+                    {slot.description || "No description generated yet..."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    placeholder="Enter topic (e.g. Murottal Pagi, Ceramah...)"
+                    className="w-full pl-4 pr-10 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    value={topics[slot.id] !== undefined ? topics[slot.id] : (slot.topic || "")}
+                    onChange={(e) => setTopics(prev => ({ ...prev, [slot.id]: e.target.value }))}
+                    onBlur={(e) => {
+                      if (e.target.value !== slot.topic) {
+                        fetch(`/api/metadata-slots/${slot.id}`, {
+                          method: "PUT",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ ...slot, topic: e.target.value })
+                        });
+                      }
+                    }}
+                  />
+                  <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
+                </div>
+                <button
+                  onClick={() => handleGenerate(slot.id, topics[slot.id] || slot.topic)}
+                  disabled={generating === slot.id}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all disabled:opacity-50"
+                >
+                  {generating === slot.id ? (
+                    <RefreshCw size={14} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={14} />
+                  )}
+                  Generate AI
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Edit Modal */}
+      <AnimatePresence>
+        {editingSlot && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden"
+            >
+              <form onSubmit={handleSave}>
+                <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                  <h3 className="text-xl font-bold text-slate-800 dark:text-white">Edit Slot Metadata</h3>
+                  <button type="button" onClick={() => setEditingSlot(null)} className="text-slate-400 hover:text-slate-600">
+                    <X size={20} />
+                  </button>
+                </div>
+                <div className="p-6 space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Title</label>
+                    <input
+                      type="text"
+                      value={editingSlot.title}
+                      onChange={e => setEditingSlot({ ...editingSlot, title: e.target.value })}
+                      className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Description</label>
+                    <textarea
+                      rows={6}
+                      value={editingSlot.description}
+                      onChange={e => setEditingSlot({ ...editingSlot, description: e.target.value })}
+                      className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+                <div className="p-6 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setEditingSlot(null)}
+                    className="px-6 py-2 text-slate-600 dark:text-slate-400 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 dark:shadow-none transition-all"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 // --- App Router ---
 
 export default function App() {
@@ -2594,7 +2878,7 @@ export default function App() {
               <Route path="/media" element={<Layout><MediaLibrary /></Layout>} />
               <Route path="/playlists" element={<Layout><Playlists /></Layout>} />
               <Route path="/streams" element={<Layout><Streams /></Layout>} />
-              <Route path="/scheduler" element={<Layout><Scheduler /></Layout>} />
+              <Route path="/ai-metadata" element={<Layout><AIMetadataPage /></Layout>} />
               <Route path="/guide" element={<Layout><Guide /></Layout>} />
               <Route path="/users" element={<Layout><UserManagement /></Layout>} />
               <Route path="/settings" element={<Layout><SettingsPage /></Layout>} />
