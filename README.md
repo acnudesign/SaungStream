@@ -88,7 +88,22 @@ pm2 save
 pm2 startup
 ```
 
-### 11. Useful PM2 Commands
+### 11. Run the Application with PM2 - Ngrok
+```bash
+# Config first the Ngrok with your account
+ngrok config add-authtoken [TOKEN]
+
+# Run the Ngrok using PM2 too
+pm2 start ngrok --name ngrok-saung -- http 3000
+
+# Save the PM2 process list
+pm2 save
+
+# Setup PM2 to start on boot (follow the instructions it provides)
+pm2 startup
+```
+
+### 12. Useful PM2 Commands
 - `pm2 status`: Check the status of your application.
 - `pm2 logs saungstream`: View real-time logs.
 - `pm2 restart saungstream`: Restart the application.
