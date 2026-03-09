@@ -483,22 +483,33 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                   </div>
                 )}
 
-                <div className="flex gap-3">
+                <div className="flex flex-col gap-3">
                   <button 
-                    onClick={() => setShowUpdateModal(false)}
-                    className="flex-1 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                    onClick={checkUpdate}
+                    disabled={isUpdating}
+                    className="w-full py-3 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-2"
                   >
-                    Close
+                    <RefreshCw size={18} className={cn(isUpdating && "animate-spin")} />
+                    Check for Updates (Fetch Commits)
                   </button>
+
                   {updateAvailable && (
                     <button 
                       onClick={handleUpdate}
                       disabled={isUpdating}
-                      className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all flex items-center justify-center gap-2"
+                      className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all flex items-center justify-center gap-2"
                     >
-                      {isUpdating ? "Updating..." : "Update Now"}
+                      <ArrowUp size={18} />
+                      {isUpdating ? "Updating System..." : "Start System Update"}
                     </button>
                   )}
+                  
+                  <button 
+                    onClick={() => setShowUpdateModal(false)}
+                    className="w-full py-2 text-slate-400 dark:text-slate-500 text-sm hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                  >
+                    Close
+                  </button>
                 </div>
               </div>
             </motion.div>
@@ -1648,10 +1659,13 @@ const Streams = () => {
                     <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Duration (Hours)</label>
                     <select 
                       value={formData.duration}
-                      onChange={e => setFormData({...formData, duration: parseInt(e.target.value)})}
+                      onChange={e => setFormData({...formData, duration: parseFloat(e.target.value)})}
                       className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="-1">Infinite (Manual Stop)</option>
+                      <option value="0.083333">5 Minutes (Test)</option>
+                      <option value="0.25">15 Minutes (Test)</option>
+                      <option value="0.5">30 Minutes (Test)</option>
                       {[...Array(24)].map((_, i) => (
                         <option key={i+1} value={i+1}>{i+1} Hour{i > 0 ? 's' : ''}</option>
                       ))}
@@ -1885,7 +1899,7 @@ const Streams = () => {
                     <div>
                       <p className="text-[10px] uppercase font-bold text-slate-400">Duration</p>
                       <p className="font-bold text-slate-700 dark:text-slate-300">
-                        {stream.duration === -1 ? 'Infinite' : `${stream.duration}h`} {stream.loop === 1 && '(Loop)'}
+                        {stream.duration === -1 ? 'Infinite' : stream.duration < 1 ? `${Math.round(stream.duration * 60)}m` : `${stream.duration}h`} {stream.loop === 1 && '(Loop)'}
                       </p>
                     </div>
                   </div>
