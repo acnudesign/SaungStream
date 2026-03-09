@@ -28,21 +28,16 @@ const __dirname = path.dirname(__filename);
 // Ensure directories exist
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 const THUMBNAILS_DIR = path.join(process.cwd(), "thumbnails");
+const PROFILES_DIR = path.join(process.cwd(), "profiles");
 const DATA_DIR = path.join(process.cwd(), "data");
 
 console.log(`Initializing directories in: ${process.cwd()}`);
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR);
-  console.log("Created uploads directory");
-}
-if (!fs.existsSync(THUMBNAILS_DIR)) {
-  fs.mkdirSync(THUMBNAILS_DIR);
-  console.log("Created thumbnails directory");
-}
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR);
-  console.log("Created data directory");
-}
+[UPLOADS_DIR, THUMBNAILS_DIR, PROFILES_DIR, DATA_DIR].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`Created directory: ${dir}`);
+  }
+});
 
 // Move existing DB files to data/ if they exist in root to avoid git update locks
 const dbFiles = ["saungstream.db", "sessions.db", "saungstream.db-shm", "saungstream.db-wal"];
@@ -183,7 +178,7 @@ const migrate = () => {
       if (!columns.includes("video_id")) db.prepare("ALTER TABLE streams ADD COLUMN video_id INTEGER").run();
       if (!columns.includes("platform")) db.prepare("ALTER TABLE streams ADD COLUMN platform TEXT DEFAULT 'youtube'").run();
       if (!columns.includes("loop")) db.prepare("ALTER TABLE streams ADD COLUMN loop INTEGER DEFAULT 1").run();
-      if (!columns.includes("duration")) db.prepare("ALTER TABLE streams ADD COLUMN duration INTEGER DEFAULT -1").run();
+      if (!columns.includes("duration")) db.prepare("ALTER TABLE streams ADD COLUMN duration REAL DEFAULT -1").run();
       if (!columns.includes("started_at")) db.prepare("ALTER TABLE streams ADD COLUMN started_at DATETIME").run();
       if (!columns.includes("start_time")) db.prepare("ALTER TABLE streams ADD COLUMN start_time TEXT").run();
       if (!columns.includes("start_date")) db.prepare("ALTER TABLE streams ADD COLUMN start_date TEXT").run();
@@ -426,9 +421,19 @@ class StreamManager {
     const process = this.activeStreams.get(streamId);
     if (process) {
       try {
-        process.kill("SIGKILL"); // Force kill to ensure it stops
+        // Use SIGINT for cleaner shutdown, allowing FFmpeg to send trailer/end of stream
+        process.kill("SIGINT");
+        
+        // If it doesn't stop in 5 seconds, force kill
+        setTimeout(() => {
+          if (this.activeStreams.has(streamId)) {
+            try {
+              process.kill("SIGKILL");
+            } catch (e) {}
+          }
+        }, 5000);
       } catch (e) {
-        console.error(`Failed to kill stream ${streamId}`, e);
+        console.error(`Failed to stop stream ${streamId}`, e);
       }
       this.activeStreams.delete(streamId);
     }
@@ -528,9 +533,7 @@ app.get("/api/me", (req, res) => {
 // Profile Picture Upload
 const profileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = path.join(__dirname, "public", "profiles");
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    cb(null, PROFILES_DIR);
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
@@ -975,8 +978,13 @@ app.post("/api/system/settings/clear-update-flag", requireAuth, requireAdmin, (r
 
 app.get("/api/system/update-check", requireAuth, async (req, res) => {
   try {
-    // 1. Fetch latest from origin
+    // 1. Ensure remote is set correctly and fetch latest
     try {
+      try {
+        await execAsync("git remote set-url origin https://github.com/acnudesign/SaungStream.git");
+      } catch (e) {
+        await execAsync("git remote add origin https://github.com/acnudesign/SaungStream.git");
+      }
       await execAsync("git fetch origin main");
     } catch (e) {
       console.error("Fetch failed in update-check:", e);
@@ -1047,9 +1055,14 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
     try {
       console.log("Starting background system update from GitHub...");
       
-      // 1. Check if git is initialized
+      // 1. Check if git is initialized and ensure remote is correct
       try {
         await execAsync("git rev-parse --is-inside-work-tree");
+        try {
+          await execAsync("git remote set-url origin https://github.com/acnudesign/SaungStream.git");
+        } catch (e) {
+          await execAsync("git remote add origin https://github.com/acnudesign/SaungStream.git");
+        }
       } catch (e) {
         await execAsync("git init");
         try {
@@ -1135,9 +1148,10 @@ app.get("/api/system/stats", requireAuth, requireAdmin, async (req, res) => {
   res.json(stats);
 });
 
-// Serve thumbnails
+// Serve static files
 app.use("/thumbnails", express.static(THUMBNAILS_DIR));
 app.use("/uploads", express.static(UPLOADS_DIR));
+app.use("/profiles", express.static(PROFILES_DIR));
 
 // --- Background Scheduler Engine ---
 setInterval(() => {
