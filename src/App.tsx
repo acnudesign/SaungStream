@@ -363,6 +363,10 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
               <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">{user.role}</p>
             </div>
           </div>
+          <div className="flex flex-col gap-2 mb-6">
+            <Link to="/terms" className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors">Terms of Service</Link>
+            <Link to="/privacy" className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors">Privacy Policy</Link>
+          </div>
           <button 
             onClick={logout}
             className="flex items-center gap-3 w-full p-3 text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all font-bold text-sm"
@@ -659,6 +663,11 @@ const LoginPage = () => {
             Sign In
           </button>
         </form>
+
+        <div className="mt-8 pt-6 border-t border-slate-100 dark:border-slate-800 flex justify-center gap-6">
+          <Link to="/terms" className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors">Terms of Service</Link>
+          <Link to="/privacy" className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors">Privacy Policy</Link>
+        </div>
       </motion.div>
     </div>
   );
@@ -3185,6 +3194,84 @@ const AIMetadataPage = () => {
   );
 };
 
+const TermsOfService = () => (
+  <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-6 lg:p-20">
+    <div className="max-w-4xl mx-auto bg-white dark:bg-slate-900 p-8 lg:p-12 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl">
+      <h1 className="text-3xl font-black text-slate-800 dark:text-white mb-8">Terms of Service</h1>
+      <div className="prose dark:prose-invert max-w-none space-y-6 text-slate-600 dark:text-slate-400">
+        <section>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">1. Acceptance of Terms</h2>
+          <p>By accessing and using SaungStream, you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the service.</p>
+        </section>
+        <section>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">2. Description of Service</h2>
+          <p>SaungStream is a cloud-based streaming management tool that allows users to schedule and broadcast video content to platforms like YouTube using the YouTube API Services.</p>
+        </section>
+        <section>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">3. User Responsibilities</h2>
+          <p>You are responsible for the content you stream and must ensure it complies with the terms of service of the destination platforms (e.g., YouTube Community Guidelines).</p>
+        </section>
+        <section>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">4. YouTube API Services</h2>
+          <p>Our service uses YouTube API Services. By using SaungStream to stream to YouTube, you are also agreeing to be bound by the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">YouTube Terms of Service</a>.</p>
+        </section>
+        <section>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">5. Limitation of Liability</h2>
+          <p>SaungStream is provided "as is" without any warranties. We are not liable for any damages resulting from the use or inability to use the service.</p>
+        </section>
+        <div className="pt-8 border-t border-slate-100 dark:border-slate-800">
+          <Link to="/login" className="text-indigo-600 font-bold hover:underline flex items-center gap-2">
+            <ChevronLeft size={16} /> Back to Login
+          </Link>
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+const PrivacyPolicy = () => (
+  <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-6 lg:p-20">
+    <div className="max-w-4xl mx-auto bg-white dark:bg-slate-900 p-8 lg:p-12 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl">
+      <h1 className="text-3xl font-black text-slate-800 dark:text-white mb-8">Privacy Policy</h1>
+      <div className="prose dark:prose-invert max-w-none space-y-6 text-slate-600 dark:text-slate-400">
+        <section>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">1. Information We Collect</h2>
+          <p>We collect information necessary to provide our streaming services, including:</p>
+          <ul className="list-disc ml-6 space-y-2">
+            <li>Account information (username, email).</li>
+            <li>YouTube account metadata (channel ID, broadcast IDs) via YouTube API Services when you connect your channel.</li>
+          </ul>
+        </section>
+        <section>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">2. How We Use Your Information</h2>
+          <p>We use your information to:</p>
+          <ul className="list-disc ml-6 space-y-2">
+            <li>Manage your streaming schedules and broadcasts.</li>
+            <li>Authenticate your access to the YouTube API to perform streaming actions on your behalf.</li>
+          </ul>
+        </section>
+        <section>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">3. Data Sharing and Third Parties</h2>
+          <p>We do not sell your personal data. We share data with YouTube API Services to facilitate your live streams. You can manage SaungStream's access to your data via the <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Google security settings page</a>.</p>
+        </section>
+        <section>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">4. Data Retention</h2>
+          <p>We retain your data as long as your account is active. You can request data deletion by contacting the administrator or disconnecting your YouTube channel.</p>
+        </section>
+        <section>
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">5. Google Privacy Policy</h2>
+          <p>For more information on how Google manages your data, please refer to the <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Google Privacy Policy</a>.</p>
+        </section>
+        <div className="pt-8 border-t border-slate-100 dark:border-slate-800">
+          <Link to="/login" className="text-indigo-600 font-bold hover:underline flex items-center gap-2">
+            <ChevronLeft size={16} /> Back to Login
+          </Link>
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
 // --- App Router ---
 
 export default function App() {
@@ -3195,6 +3282,8 @@ export default function App() {
           <Router>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/terms" element={<TermsOfService />} />
+              <Route path="/privacy" element={<PrivacyPolicy />} />
               <Route path="/" element={<Layout><Dashboard /></Layout>} />
               <Route path="/media" element={<Layout><MediaLibrary /></Layout>} />
               <Route path="/playlists" element={<Layout><Playlists /></Layout>} />
