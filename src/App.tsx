@@ -42,7 +42,8 @@ import {
   Edit2,
   BookOpen,
   Maximize2,
-  ExternalLink
+  ExternalLink,
+  Youtube
 } from "lucide-react";
 import { 
   format, 
@@ -309,6 +310,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     { to: "/media", icon: Film, label: "Media Library" },
     { to: "/playlists", icon: ListMusic, label: "Playlists" },
     { to: "/streams", icon: Radio, label: "Streams" },
+    { to: "/youtube-channels", icon: Youtube, label: "YouTube Channels" },
     { to: "/ai-metadata", icon: Sparkles, label: "AI Add-ons" },
     { to: "/guide", icon: BookOpen, label: "Guide" },
     { to: "/settings", icon: Settings, label: "Settings" },
@@ -947,16 +949,21 @@ const MediaLibrary = () => {
   const [downloadUrl, setDownloadUrl] = useState("");
   const [isDownloading, setIsDownloading] = useState(false);
   const [previewMedia, setPreviewMedia] = useState<any>(null);
+  const [storage, setStorage] = useState<any>({ used: 0, limit: 10 * 1024 * 1024 * 1024, percentage: 0 });
 
   const [uploadProgress, setUploadProgress] = useState(0);
 
   const fetchMedia = async () => {
     const data = await fetchJson("/api/media");
     setMedia(data);
+    const storageData = await fetchJson("/api/user/storage", { used: 0, limit: 10 * 1024 * 1024 * 1024, percentage: 0 });
+    setStorage(storageData);
   };
 
   useEffect(() => {
     fetchMedia();
+    const interval = setInterval(fetchMedia, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1037,6 +1044,27 @@ const MediaLibrary = () => {
         <div>
           <h1 className="text-3xl font-bold text-slate-800 dark:text-white">Media Library</h1>
           <p className="text-slate-500 dark:text-slate-400">Manage your video assets</p>
+          
+          {storage && (
+            <div className="mt-4 max-w-xs">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Storage Usage</span>
+                <span className="text-[10px] font-bold text-indigo-600">{storage.percentage}%</span>
+              </div>
+              <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                <div 
+                  className={cn(
+                    "h-full transition-all duration-500",
+                    storage.percentage > 90 ? "bg-red-500" : storage.percentage > 70 ? "bg-amber-500" : "bg-indigo-600"
+                  )}
+                  style={{ width: `${storage.percentage}%` }}
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                {(storage.used / (1024*1024*1024)).toFixed(2)} GB of {(storage.limit / (1024*1024*1024)).toFixed(0)} GB used
+              </p>
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
@@ -1119,7 +1147,19 @@ const MediaLibrary = () => {
               </div>
             </div>
             <div className="p-4">
-              <p className="font-bold text-slate-800 dark:text-slate-200 truncate text-sm mb-1">{item.filename}</p>
+              <div className="flex items-center justify-between mb-1">
+                <p className="font-bold text-slate-800 dark:text-slate-200 truncate text-sm">{item.filename}</p>
+                {item.status === 'processing' ? (
+                  <span className="flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/20 px-1.5 py-0.5 rounded uppercase animate-pulse">
+                    <RefreshCw size={10} className="animate-spin" />
+                    Encoding
+                  </span>
+                ) : item.is_pre_encoded === 1 && (
+                  <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded uppercase">
+                    Encoded
+                  </span>
+                )}
+              </div>
               <div className="flex items-center justify-between">
                 <p className="text-xs text-slate-400 dark:text-slate-500">{new Date(item.created_at).toLocaleDateString()}</p>
                 <button 
@@ -1411,15 +1451,18 @@ const Streams = () => {
   const [streams, setStreams] = useState([]);
   const [playlists, setPlaylists] = useState([]);
   const [media, setMedia] = useState([]);
+  const [youtubeChannels, setYoutubeChannels] = useState([]);
   const [isCreating, setIsCreating] = useState(false);
   const [editingStream, setEditingStream] = useState<any>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
+    description: "",
     source_type: "playlist",
     playlist_id: "",
     video_id: "",
     platform: "youtube",
+    youtube_channel_id: "",
     rtmp_url: "rtmps://a.rtmp.youtube.com/live2",
     stream_key: "",
     bitrate: 3000,
@@ -1431,7 +1474,8 @@ const Streams = () => {
     repeat_type: "none",
     repeat_days: "",
     repeat_date: 1,
-    schedule_enabled: false
+    schedule_enabled: false,
+    use_ai_metadata: true
   });
 
   const fetchStreams = async () => {
@@ -1443,22 +1487,46 @@ const Streams = () => {
     fetchStreams();
     fetchJson("/api/playlists").then(setPlaylists);
     fetchJson("/api/media").then(setMedia);
+    fetchJson("/api/youtube/channels").then(setYoutubeChannels);
     
     const interval = setInterval(fetchStreams, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  const fetchAiMetadata = async () => {
+    try {
+      const res = await fetch(`/api/metadata/fetch?date=${formData.start_date}&time=${formData.start_time}`);
+      const data = await res.json();
+      if (data.title || data.description) {
+        setFormData({
+          ...formData,
+          name: data.title || formData.name,
+          description: data.description || formData.description
+        });
+      } else {
+        alert("No AI metadata found for this time slot.");
+      }
+    } catch (err) {
+      console.error("Failed to fetch AI metadata:", err);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const url = editingStream ? `/api/streams/${editingStream.id}` : "/api/streams";
     const method = editingStream ? "PUT" : "POST";
     
-    // Ensure empty IDs are sent as null
+    // Ensure empty IDs are sent as null and numeric fields are valid
     const submitData = {
       ...formData,
       playlist_id: formData.playlist_id || null,
       video_id: formData.video_id || null,
-      schedule_enabled: formData.schedule_enabled ? 1 : 0
+      youtube_channel_id: formData.youtube_channel_id || null,
+      bitrate: Number(formData.bitrate) || 3000,
+      duration: Number(formData.duration) || -1,
+      repeat_date: Number(formData.repeat_date) || 1,
+      schedule_enabled: formData.schedule_enabled ? 1 : 0,
+      use_ai_metadata: formData.use_ai_metadata ? 1 : 0
     };
     
     try {
@@ -1499,10 +1567,12 @@ const Streams = () => {
     setEditingStream(stream);
     setFormData({
       name: stream.name,
+      description: stream.description || "",
       source_type: stream.source_type || "playlist",
       playlist_id: stream.playlist_id || "",
       video_id: stream.video_id || "",
       platform: stream.platform || "youtube",
+      youtube_channel_id: stream.youtube_channel_id || "",
       rtmp_url: stream.rtmp_url,
       stream_key: stream.stream_key,
       bitrate: stream.bitrate,
@@ -1514,7 +1584,8 @@ const Streams = () => {
       repeat_type: stream.repeat_type || "none",
       repeat_days: stream.repeat_days || "",
       repeat_date: stream.repeat_date || 1,
-      schedule_enabled: stream.schedule_enabled === 1
+      schedule_enabled: stream.schedule_enabled === 1,
+      use_ai_metadata: stream.use_ai_metadata === 1
     });
     setIsCreating(true);
   };
@@ -1528,12 +1599,12 @@ const Streams = () => {
     { id: 'custom', name: 'Custom RTMP', url: '' }
   ];
 
-  const bitrates = [
-    { label: 'Resolusi 4K, fps 30, bitrate 12000', value: 12000 },
-    { label: 'Resolusi 1080p, fps 30, bitrate 6500', value: 6500 },
-    { label: 'Resolusi 720p, fps 30, bitrate 2500', value: 2500 },
-    { label: 'Custom 3000k', value: 3000 },
-    { label: 'Custom 1500k', value: 1500 }
+  const qualityPresets = [
+    { id: '4k', name: '4K Ultra HD', resolution: '3840x2160', bitrate: 12000, description: 'High quality, requires fast internet' },
+    { id: '1080p_high', name: '1080p High', resolution: '1920x1080', bitrate: 6500, description: 'Best for most streams' },
+    { id: '1080p', name: '1080p Standard', resolution: '1920x1080', bitrate: 4500, description: 'Good balance' },
+    { id: '720p', name: '720p HD', resolution: '1280x720', bitrate: 2500, description: 'Safe for most connections' },
+    { id: '480p', name: '480p SD', resolution: '854x480', bitrate: 1500, description: 'Low bandwidth' }
   ];
 
   return (
@@ -1545,10 +1616,11 @@ const Streams = () => {
         </div>
         <button 
           onClick={() => { setIsCreating(true); setEditingStream(null); setFormData({
-            name: "", source_type: "playlist", playlist_id: "", video_id: "", platform: "youtube",
+            name: "", description: "", source_type: "playlist", playlist_id: "", video_id: "", platform: "youtube",
+            youtube_channel_id: "",
             rtmp_url: "rtmps://a.rtmp.youtube.com/live2", stream_key: "", bitrate: 3000, resolution: "1280x720",
             loop: true, duration: -1, start_time: "12:00", start_date: new Date().toISOString().slice(0, 10),
-            repeat_type: "none", repeat_days: "", repeat_date: 1, schedule_enabled: true
+            repeat_type: "none", repeat_days: "", repeat_date: 1, schedule_enabled: true, use_ai_metadata: true
           }); }}
           className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all"
         >
@@ -1567,7 +1639,17 @@ const Streams = () => {
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Stream Name</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Stream Name</label>
+                  <button 
+                    type="button"
+                    onClick={fetchAiMetadata}
+                    className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                  >
+                    <Sparkles size={10} />
+                    Auto-fill AI Meta
+                  </button>
+                </div>
                 <input 
                   type="text" 
                   value={formData.name}
@@ -1575,6 +1657,15 @@ const Streams = () => {
                   className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                   placeholder="My Awesome Stream"
                   required
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Description</label>
+                <textarea 
+                  value={formData.description}
+                  onChange={e => setFormData({...formData, description: e.target.value})}
+                  className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 min-h-[42px] resize-none"
+                  placeholder="Stream description..."
                 />
               </div>
               <div className="space-y-2">
@@ -1590,6 +1681,21 @@ const Streams = () => {
                   {platforms.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
+
+              {formData.platform === 'youtube' && (
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700 dark:text-slate-300">YouTube Channel (Automation)</label>
+                  <select 
+                    value={formData.youtube_channel_id}
+                    onChange={e => setFormData({...formData, youtube_channel_id: e.target.value})}
+                    className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="">Manual RTMP (No Automation)</option>
+                    {youtubeChannels.map((c: any) => <option key={c.id} value={c.id}>{c.title}</option>)}
+                  </select>
+                  <p className="text-[10px] text-slate-500 italic">If selected, RTMP URL & Key will be generated automatically when stream starts.</p>
+                </div>
+              )}
               <div className="space-y-2">
                 <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Source Type</label>
                 <div className="flex gap-4">
@@ -1638,9 +1744,10 @@ const Streams = () => {
                   type="text" 
                   value={formData.rtmp_url}
                   onChange={e => setFormData({...formData, rtmp_url: e.target.value})}
-                  className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                  disabled={!!formData.youtube_channel_id}
+                  className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
                   placeholder="rtmp://..."
-                  required
+                  required={!formData.youtube_channel_id}
                 />
               </div>
               <div className="space-y-2">
@@ -1649,9 +1756,10 @@ const Streams = () => {
                   type="password" 
                   value={formData.stream_key}
                   onChange={e => setFormData({...formData, stream_key: e.target.value})}
-                  className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                  disabled={!!formData.youtube_channel_id}
+                  className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
                   placeholder="xxxx-xxxx-xxxx-xxxx"
-                  required
+                  required={!formData.youtube_channel_id}
                 />
               </div>
             </div>
@@ -1696,18 +1804,32 @@ const Streams = () => {
 
                 <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center justify-between">
                   Scheduling
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <div className="relative">
-                      <input 
-                        type="checkbox" 
-                        checked={formData.schedule_enabled}
-                        onChange={e => setFormData({...formData, schedule_enabled: e.target.checked})}
-                        className="sr-only peer"
-                      />
-                      <div className="w-8 h-4 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:bg-indigo-600 transition-all after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
-                    </div>
-                    <span className="text-xs font-bold text-slate-500">Enable Schedule</span>
-                  </label>
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer group">
+                      <div className="relative">
+                        <input 
+                          type="checkbox" 
+                          checked={formData.use_ai_metadata}
+                          onChange={e => setFormData({...formData, use_ai_metadata: e.target.checked})}
+                          className="sr-only peer"
+                        />
+                        <div className="w-8 h-4 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:bg-emerald-600 transition-all after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
+                      </div>
+                      <span className="text-xs font-bold text-slate-500 group-hover:text-emerald-600 transition-colors">Use AI Metadata</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer group">
+                      <div className="relative">
+                        <input 
+                          type="checkbox" 
+                          checked={formData.schedule_enabled}
+                          onChange={e => setFormData({...formData, schedule_enabled: e.target.checked})}
+                          className="sr-only peer"
+                        />
+                        <div className="w-8 h-4 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:bg-indigo-600 transition-all after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
+                      </div>
+                      <span className="text-xs font-bold text-slate-500 group-hover:text-indigo-600 transition-colors">Enable Schedule</span>
+                    </label>
+                  </div>
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="space-y-2">
@@ -1732,7 +1854,14 @@ const Streams = () => {
                     <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Repetition</label>
                     <select 
                       value={formData.repeat_type}
-                      onChange={e => setFormData({...formData, repeat_type: e.target.value})}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setFormData({
+                          ...formData, 
+                          repeat_type: val,
+                          schedule_enabled: val !== 'none' ? true : formData.schedule_enabled
+                        });
+                      }}
                       className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="none">Once (One Time)</option>
@@ -1798,33 +1927,40 @@ const Streams = () => {
                 onClick={() => setShowAdvanced(!showAdvanced)}
                 className="text-sm font-bold text-indigo-600 flex items-center gap-2 mb-4"
               >
-                {showAdvanced ? 'Hide' : 'Show'} Advanced Settings (Bitrate & Resolution)
+                {showAdvanced ? 'Hide' : 'Show'} Quality Settings
               </button>
 
               {showAdvanced && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-800">
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Bitrate Preset</label>
-                    <select 
-                      value={formData.bitrate}
-                      onChange={e => setFormData({...formData, bitrate: Number(e.target.value)})}
-                      className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      {bitrates.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Resolution</label>
-                    <select 
-                      value={formData.resolution}
-                      onChange={e => setFormData({...formData, resolution: e.target.value})}
-                      className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      <option value="3840x2160">4K (3840x2160)</option>
-                      <option value="1920x1080">1080p (1920x1080)</option>
-                      <option value="1280x720">720p (1280x720)</option>
-                      <option value="854x480">480p (854x480)</option>
-                    </select>
+                <div className="p-6 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                  <label className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-4 block">Stream Quality Preset</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {qualityPresets.map(preset => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => setFormData({...formData, bitrate: preset.bitrate, resolution: preset.resolution})}
+                        className={cn(
+                          "p-4 rounded-xl border text-left transition-all",
+                          formData.bitrate === preset.bitrate && formData.resolution === preset.resolution
+                            ? "bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-none"
+                            : "bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-indigo-300"
+                        )}
+                      >
+                        <p className="font-bold text-sm">{preset.name}</p>
+                        <p className={cn(
+                          "text-[10px] mt-1",
+                          formData.bitrate === preset.bitrate && formData.resolution === preset.resolution ? "text-indigo-100" : "text-slate-400"
+                        )}>
+                          {preset.resolution} @ {(preset.bitrate / 1000).toFixed(1)} Mbps
+                        </p>
+                        <p className={cn(
+                          "text-[10px] mt-2 italic",
+                          formData.bitrate === preset.bitrate && formData.resolution === preset.resolution ? "text-indigo-200" : "text-slate-500"
+                        )}>
+                          {preset.description}
+                        </p>
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1878,7 +2014,12 @@ const Streams = () => {
             <div className="flex-1 p-6 flex flex-col justify-between">
               <div>
                 <div className="flex items-start justify-between mb-2">
-                  <h3 className="text-xl font-bold text-slate-800 dark:text-white group-hover:text-indigo-600 transition-colors">{stream.name}</h3>
+                  <div className="space-y-1">
+                    <h3 className="text-xl font-bold text-slate-800 dark:text-white group-hover:text-indigo-600 transition-colors">{stream.name}</h3>
+                    {stream.description && (
+                      <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2 max-w-lg">{stream.description}</p>
+                    )}
+                  </div>
                   <div className="flex gap-2">
                     <button 
                       onClick={() => handleEdit(stream)}
@@ -2596,13 +2737,122 @@ const SettingsPage = () => {
   );
 };
 
+const YouTubeChannelsPage = () => {
+  const [channels, setChannels] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchChannels = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchJson("/api/youtube/channels", []);
+      setChannels(data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchChannels();
+    
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'YOUTUBE_AUTH_SUCCESS') {
+        fetchChannels();
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  const handleConnect = async () => {
+    try {
+      const res = await fetch("/api/auth/youtube");
+      const data = await res.json();
+      if (data.url) {
+        window.open(data.url, 'youtube_auth', 'width=600,height=700');
+      }
+    } catch (err) {
+      alert("Failed to initiate YouTube connection");
+    }
+  };
+
+  const deleteChannel = async (id: number) => {
+    if (!confirm("Disconnect this YouTube channel?")) return;
+    await fetch(`/api/youtube/channels/${id}`, { method: "DELETE" });
+    fetchChannels();
+  };
+
+  return (
+    <div className="space-y-8">
+      <header className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-800 dark:text-white flex items-center gap-3">
+            <Youtube className="text-red-600" />
+            YouTube Channels
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400">Connect your channels for automated live streaming</p>
+        </div>
+        <button 
+          onClick={handleConnect}
+          className="flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg shadow-red-200 dark:shadow-none hover:bg-red-700 transition-all"
+        >
+          <Plus size={20} />
+          Connect Channel
+        </button>
+      </header>
+
+      {loading ? (
+        <div className="flex items-center justify-center h-64">
+          <RefreshCw className="animate-spin text-indigo-600" size={32} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {channels.map((channel: any) => (
+            <div key={channel.id} className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-4 group">
+              <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-slate-100 dark:border-slate-800">
+                <img src={channel.thumbnail} alt={channel.title} className="w-full h-full object-cover" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-slate-800 dark:text-white truncate">{channel.title}</h3>
+                <p className="text-xs text-slate-400 truncate">ID: {channel.channel_id}</p>
+                <div className="flex items-center gap-2 mt-2">
+                  <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded uppercase">Connected</span>
+                  <a href={`https://youtube.com/channel/${channel.channel_id}`} target="_blank" className="text-slate-400 hover:text-indigo-600">
+                    <ExternalLink size={12} />
+                  </a>
+                </div>
+              </div>
+              <button 
+                onClick={() => deleteChannel(channel.id)}
+                className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+              >
+                <Trash2 size={18} />
+              </button>
+            </div>
+          ))}
+          {channels.length === 0 && (
+            <div className="col-span-full py-20 text-center text-slate-400 dark:text-slate-600 bg-white dark:bg-slate-900 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800">
+              <Youtube size={48} className="mx-auto mb-4 opacity-20" />
+              <p className="font-medium">No YouTube channels connected</p>
+              <p className="text-sm">Connect a channel to enable automated streaming</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const AIMetadataPage = () => {
   const [slots, setSlots] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState<number | null>(null);
+  const [bulkGenerating, setBulkGenerating] = useState(false);
   const [activeDay, setActiveDay] = useState(new Date().getDay());
   const [editingSlot, setEditingSlot] = useState<any>(null);
   const [topics, setTopics] = useState<Record<number, string>>({});
+  const [bulkTopic, setBulkTopic] = useState("");
 
   const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -2653,6 +2903,45 @@ const AIMetadataPage = () => {
     }
   };
 
+  const handleBulkGenerate = async () => {
+    if (!bulkTopic) {
+      alert("Please enter a topic for bulk generation");
+      return;
+    }
+    setBulkGenerating(true);
+    try {
+      const res = await fetch("/api/metadata-slots/generate-day", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dayOfWeek: activeDay, topic: bulkTopic })
+      });
+      if (res.ok) {
+        await fetchSlots();
+        setBulkTopic("");
+      } else {
+        const data = await res.json();
+        alert(data.error || "Bulk generation failed");
+      }
+    } catch (err) {
+      console.error("Bulk generation error:", err);
+    } finally {
+      setBulkGenerating(false);
+    }
+  };
+
+  const handleResetSlots = async () => {
+    if (!confirm("Reset all slots to 'unused'? This will allow them to be picked again by the scheduler.")) return;
+    try {
+      const res = await fetch("/api/metadata-slots/reset-used", { method: "POST" });
+      if (res.ok) {
+        await fetchSlots();
+        alert("All slots reset successfully!");
+      }
+    } catch (err) {
+      console.error("Reset error:", err);
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -2690,6 +2979,33 @@ const AIMetadataPage = () => {
           </h1>
           <p className="text-slate-500 dark:text-slate-400">Manage 70 unique metadata slots for your weekly live stream cycle</p>
         </div>
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1 sm:w-64">
+            <input
+              type="text"
+              placeholder="Topic for bulk generation..."
+              className="w-full pl-4 pr-10 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm"
+              value={bulkTopic}
+              onChange={(e) => setBulkTopic(e.target.value)}
+            />
+            <Sparkles className="absolute right-3 top-3 text-indigo-400" size={16} />
+          </div>
+          <button
+            onClick={handleBulkGenerate}
+            disabled={bulkGenerating}
+            className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 dark:shadow-none disabled:opacity-50 flex items-center gap-2"
+          >
+            {bulkGenerating ? <RefreshCw size={16} className="animate-spin" /> : <Sparkles size={16} />}
+            Generate Day
+          </button>
+          <button
+            onClick={handleResetSlots}
+            className="p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-red-600 rounded-xl transition-all shadow-sm"
+            title="Reset all slots usage"
+          >
+            <RefreshCw size={20} />
+          </button>
+        </div>
       </header>
 
       <div className="flex flex-wrap gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl w-fit">
@@ -2722,6 +3038,11 @@ const AIMetadataPage = () => {
                   <span className="inline-block px-2 py-1 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 text-[10px] font-black uppercase tracking-wider rounded-md mb-2">
                     {slot.slot_index < 5 ? "Morning Slot" : "Afternoon Slot"} {slot.slot_index % 5 + 1}
                   </span>
+                  {slot.is_used === 1 && (
+                    <span className="ml-2 inline-block px-2 py-1 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 text-[10px] font-black uppercase tracking-wider rounded-md mb-2">
+                      Used
+                    </span>
+                  )}
                   <h3 className="text-lg font-bold text-slate-800 dark:text-white line-clamp-1">{slot.title}</h3>
                 </div>
                 <div className="flex gap-2">
@@ -2878,6 +3199,7 @@ export default function App() {
               <Route path="/media" element={<Layout><MediaLibrary /></Layout>} />
               <Route path="/playlists" element={<Layout><Playlists /></Layout>} />
               <Route path="/streams" element={<Layout><Streams /></Layout>} />
+              <Route path="/youtube-channels" element={<Layout><YouTubeChannelsPage /></Layout>} />
               <Route path="/ai-metadata" element={<Layout><AIMetadataPage /></Layout>} />
               <Route path="/guide" element={<Layout><Guide /></Layout>} />
               <Route path="/users" element={<Layout><UserManagement /></Layout>} />
