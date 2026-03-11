@@ -17,6 +17,8 @@ import { promisify } from "util";
 import os from "os";
 import checkDiskSpace from "check-disk-space";
 import { GoogleGenAI } from "@google/genai";
+import axios from "axios";
+import { File as MegaFile } from "megajs";
 
 const execAsync = promisify(exec);
 
@@ -269,11 +271,36 @@ const migrate = () => {
       if (!columns.includes("last_triggered")) db.prepare("ALTER TABLE streams ADD COLUMN last_triggered TEXT").run();
       if (!columns.includes("network_optimization")) db.prepare("ALTER TABLE streams ADD COLUMN network_optimization INTEGER DEFAULT 1").run();
       if (!columns.includes("use_ai_metadata")) db.prepare("ALTER TABLE streams ADD COLUMN use_ai_metadata INTEGER DEFAULT 1").run();
+      
+      // New YouTube Metadata columns
+      if (!columns.includes("youtube_playlists")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_playlists TEXT").run();
+      if (!columns.includes("youtube_made_for_kids")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_made_for_kids INTEGER DEFAULT 0").run();
+      if (!columns.includes("youtube_age_restriction")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_age_restriction INTEGER DEFAULT 0").run();
+      if (!columns.includes("youtube_paid_promotion")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_paid_promotion INTEGER DEFAULT 0").run();
+      if (!columns.includes("youtube_altered_content")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_altered_content INTEGER DEFAULT 0").run();
+      if (!columns.includes("youtube_automatic_chapters")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_automatic_chapters INTEGER DEFAULT 1").run();
+      if (!columns.includes("youtube_featured_places")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_featured_places INTEGER DEFAULT 1").run();
+      if (!columns.includes("youtube_automatic_concepts")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_automatic_concepts INTEGER DEFAULT 1").run();
+      if (!columns.includes("youtube_tags")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_tags TEXT").run();
+      if (!columns.includes("youtube_language")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_language TEXT DEFAULT 'id'").run();
+      if (!columns.includes("youtube_caption_certification")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_caption_certification TEXT").run();
+      if (!columns.includes("youtube_title_description_language")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_title_description_language TEXT DEFAULT 'id'").run();
+      if (!columns.includes("youtube_recording_date")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_recording_date TEXT").run();
+      if (!columns.includes("youtube_recording_location")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_recording_location TEXT").run();
+      if (!columns.includes("youtube_license")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_license TEXT DEFAULT 'youtube'").run();
+      if (!columns.includes("youtube_allow_embedding")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_allow_embedding INTEGER DEFAULT 1").run();
+      if (!columns.includes("youtube_publish_to_subscriptions")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_publish_to_subscriptions INTEGER DEFAULT 1").run();
+      if (!columns.includes("youtube_shorts_remixing")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_shorts_remixing TEXT DEFAULT 'allow_video_audio'").run();
+      if (!columns.includes("youtube_category")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_category TEXT DEFAULT '24'").run(); // 24 is Entertainment
+      if (!columns.includes("youtube_comments_mode")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_comments_mode TEXT DEFAULT 'on'").run();
+      if (!columns.includes("youtube_who_can_comment")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_who_can_comment TEXT DEFAULT 'anyone'").run();
+      if (!columns.includes("youtube_sort_by")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_sort_by TEXT DEFAULT 'top'").run();
     }
 
     if (table === "metadata_slots") {
       if (!columns.includes("is_used")) db.prepare("ALTER TABLE metadata_slots ADD COLUMN is_used INTEGER DEFAULT 0").run();
       if (!columns.includes("last_used_at")) db.prepare("ALTER TABLE metadata_slots ADD COLUMN last_used_at DATETIME").run();
+      if (!columns.includes("last_number")) db.prepare("ALTER TABLE metadata_slots ADD COLUMN last_number INTEGER DEFAULT 0").run();
     }
 
     if (table === "logs") {
@@ -345,7 +372,8 @@ if (!adminUser) {
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(express.json());
+app.use(express.json({ limit: '10gb' }));
+app.use(express.urlencoded({ extended: true, limit: '10gb' }));
 app.use(session({
   secret: "saungstream-secret",
   resave: false,
@@ -434,8 +462,6 @@ const getMetadataForTime = (userId: number, date: Date, timezone: string, markAs
     `).get(userId, dayOfWeek, slotIndex) as any;
 
     if (!slot) {
-      // Fallback: pick the slot even if used, but prefer unused ones from other slots if possible?
-      // User said "ngga boleh ada yang dabel kepake", so if all are used, maybe we should alert or just reuse.
       slot = db.prepare(`
         SELECT * FROM metadata_slots 
         WHERE user_id = ? AND day_of_week = ? AND slot_index = ?
@@ -443,7 +469,16 @@ const getMetadataForTime = (userId: number, date: Date, timezone: string, markAs
     }
       
     if (slot && markAsUsed) {
-      db.prepare("UPDATE metadata_slots SET is_used = 1, last_used_at = CURRENT_TIMESTAMP WHERE id = ?").run(slot.id);
+      // Increment last_number and mark as used
+      const newNumber = (slot.last_number || 0) + 1;
+      db.prepare("UPDATE metadata_slots SET is_used = 1, last_used_at = CURRENT_TIMESTAMP, last_number = ? WHERE id = ?")
+        .run(newNumber, slot.id);
+      
+      // Update the title in the returned object to include the number
+      slot.last_number = newNumber;
+      if (slot.title) {
+        slot.title = `${slot.title} #${newNumber}`;
+      }
     }
 
     return slot || null;
@@ -1037,16 +1072,66 @@ async function createYouTubeBroadcast(streamId: number) {
         },
         status: {
           privacyStatus: "public",
-          selfDeclaredMadeForKids: false
+          selfDeclaredMadeForKids: stream.youtube_made_for_kids === 1
         },
         contentDetails: {
           enableAutoStart: true,
-          enableAutoStop: true
+          enableAutoStop: true,
+          enableEmbed: stream.youtube_allow_embedding === 1
         }
       }
     });
 
     const broadcastId = broadcastRes.data.id;
+
+    // Update the video metadata (tags, category, etc.)
+    await youtube.videos.update({
+      part: ["snippet", "status", "recordingDetails"],
+      requestBody: {
+        id: broadcastId!,
+        snippet: {
+          title: stream.name,
+          description: stream.description || "Live Stream via SaungStream",
+          categoryId: stream.youtube_category || "24",
+          tags: stream.youtube_tags ? stream.youtube_tags.split(",").map((t: string) => t.trim()) : [],
+          defaultLanguage: stream.youtube_language || "id",
+          defaultAudioLanguage: stream.youtube_language || "id"
+        },
+        status: {
+          selfDeclaredMadeForKids: stream.youtube_made_for_kids === 1,
+          publishAt: stream.youtube_publish_to_subscriptions === 1 ? null : undefined // If not publishing to subs, we might need different logic, but usually for live it's handled by privacy
+        },
+        recordingDetails: {
+          recordingDate: stream.youtube_recording_date ? new Date(stream.youtube_recording_date).toISOString() : undefined,
+          locationDescription: stream.youtube_recording_location
+        }
+      }
+    });
+
+    // Handle playlists
+    if (stream.youtube_playlists) {
+      try {
+        const playlistIds = JSON.parse(stream.youtube_playlists);
+        if (Array.isArray(playlistIds)) {
+          for (const playlistId of playlistIds) {
+            await youtube.playlistItems.insert({
+              part: ["snippet"],
+              requestBody: {
+                snippet: {
+                  playlistId: playlistId,
+                  resourceId: {
+                    kind: "youtube#video",
+                    videoId: broadcastId!
+                  }
+                }
+              }
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Failed to add video to playlists:", e);
+      }
+    }
 
     // 2. Create Stream
     const streamRes = await youtube.liveStreams.insert({
@@ -1180,19 +1265,54 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-import axios from "axios";
-
 app.post("/api/media/download", requireAuth, async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
 
   try {
+    const filename = `download-${Date.now()}.mp4`;
+    const filepath = path.join(UPLOADS_DIR, filename);
+    
+    if (url.includes("mega.nz")) {
+      const file = MegaFile.fromURL(url);
+      await file.loadAttributes();
+      const stream = file.download({});
+      const writer = fs.createWriteStream(filepath);
+      stream.pipe(writer);
+      
+      writer.on("finish", () => {
+        processDownloadedFile(req, res, filepath, filename);
+      });
+      
+      writer.on("error", (err) => {
+        console.error("Mega download error:", err);
+        res.status(500).json({ error: "Failed to download from Mega" });
+      });
+      return;
+    }
+
     let downloadUrl = url;
     
     // Simple transformations for common services
     if (url.includes("drive.google.com")) {
       const match = url.match(/\/d\/(.+?)\//) || url.match(/id=(.+?)(&|$)/);
-      if (match) downloadUrl = `https://drive.google.com/uc?export=download&id=${match[1]}`;
+      if (match) {
+        const fileId = match[1];
+        try {
+          // Try to get confirmation token for large files
+          const confirmRes = await axios.get(`https://drive.google.com/uc?export=download&id=${fileId}`, {
+            validateStatus: () => true
+          });
+          const confirmMatch = confirmRes.data.match(/confirm=([0-9A-Za-z_]+)/);
+          if (confirmMatch) {
+            downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=${confirmMatch[1]}`;
+          } else {
+            downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+          }
+        } catch (e) {
+          downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+        }
+      }
     } else if (url.includes("dropbox.com")) {
       downloadUrl = url.replace("dl=0", "dl=1");
     }
@@ -1201,40 +1321,51 @@ app.post("/api/media/download", requireAuth, async (req, res) => {
       method: "get",
       url: downloadUrl,
       responseType: "stream",
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
     });
 
-    const filename = `download-${Date.now()}.mp4`;
-    const filepath = path.join(UPLOADS_DIR, filename);
     const writer = fs.createWriteStream(filepath);
-
     response.data.pipe(writer);
 
     writer.on("finish", () => {
-      const thumbnailName = `thumb-${Date.now()}.jpg`;
-      ffmpeg(filepath)
-        .screenshots({
-          timestamps: ["2%"],
-          filename: thumbnailName,
-          folder: THUMBNAILS_DIR,
-          size: "320x180",
-        })
-        .on("end", () => {
-          ffmpeg.ffprobe(filepath, (err, metadata) => {
-            const duration = metadata?.format?.duration || 0;
-            db.prepare("INSERT INTO media (user_id, filename, filepath, duration, thumbnail_path) VALUES (?, ?, ?, ?, ?)")
-              .run(req.session.user.id, filename, filepath, Math.round(duration), thumbnailName);
-            logAction(req.session.user.id, req.session.user.username, "Media Downloaded", `Downloaded ${filename} from URL`);
-            res.json({ success: true });
-          });
-        })
-        .on("error", (err) => {
-          res.status(500).json({ error: "Failed to process downloaded video" });
-        });
+      processDownloadedFile(req, res, filepath, filename);
+    });
+    
+    writer.on("error", (err) => {
+      res.status(500).json({ error: "Failed to write downloaded file" });
     });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to download from URL" });
+    console.error("Download error:", err);
+    res.status(500).json({ error: "Failed to download from URL: " + err.message });
   }
 });
+
+const processDownloadedFile = (req: any, res: any, filepath: string, filename: string) => {
+  const thumbnailName = `thumb-${Date.now()}.jpg`;
+  ffmpeg(filepath)
+    .screenshots({
+      timestamps: ["2%"],
+      filename: thumbnailName,
+      folder: THUMBNAILS_DIR,
+      size: "320x180",
+    })
+    .on("end", () => {
+      ffmpeg.ffprobe(filepath, (err, metadata) => {
+        const duration = metadata?.format?.duration || 0;
+        const size = fs.statSync(filepath).size;
+        db.prepare("INSERT INTO media (user_id, filename, filepath, duration, thumbnail_path, size, status) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(req.session.user.id, filename, filepath, Math.round(duration), thumbnailName, size, 'ready');
+        logAction(req.session.user.id, req.session.user.username, "Media Downloaded", `Downloaded ${filename} from URL`);
+        res.json({ success: true });
+      });
+    })
+    .on("error", (err) => {
+      console.error("FFmpeg processing error:", err);
+      res.status(500).json({ error: "Failed to process downloaded video" });
+    });
+};
 
 app.post("/api/media/upload", requireAuth, upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -1409,9 +1540,9 @@ app.get("/api/metadata/fetch", requireAuth, (req, res) => {
     const tz = timezone ? timezone.value : "UTC";
     
     const targetDate = new Date(`${date}T${time}:00`);
-    const metadata = getMetadataForTime(req.session.user.id, targetDate, tz);
+    const metadata = getMetadataForTime(req.session.user.id, targetDate, tz, true);
     
-    res.json(metadata || { title: "", description: "" });
+    res.json(metadata || { title: "", description: "", topic: "" });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch metadata" });
   }
@@ -1432,15 +1563,37 @@ app.get("/api/streams", requireAuth, (req, res) => {
 
 app.post("/api/streams", requireAuth, (req, res) => {
   try {
-    const { name, description, source_type, playlist_id, video_id, platform, youtube_channel_id, rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, repeat_type, repeat_days, repeat_date, schedule_enabled, use_ai_metadata } = req.body;
+    const { 
+      name, description, source_type, playlist_id, video_id, platform, youtube_channel_id, 
+      rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, 
+      repeat_type, repeat_days, repeat_date, schedule_enabled, use_ai_metadata,
+      youtube_playlists, youtube_made_for_kids, youtube_age_restriction, youtube_paid_promotion,
+      youtube_altered_content, youtube_automatic_chapters, youtube_featured_places,
+      youtube_automatic_concepts, youtube_tags, youtube_language, youtube_caption_certification,
+      youtube_title_description_language, youtube_recording_date, youtube_recording_location,
+      youtube_license, youtube_allow_embedding, youtube_publish_to_subscriptions,
+      youtube_shorts_remixing, youtube_category, youtube_comments_mode,
+      youtube_who_can_comment, youtube_sort_by
+    } = req.body;
     
     if (!name) {
       return res.status(400).json({ error: "Stream name is required" });
     }
 
     const result = db.prepare(`
-      INSERT INTO streams (user_id, name, description, source_type, playlist_id, video_id, platform, youtube_channel_id, rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, repeat_type, repeat_days, repeat_date, schedule_enabled, use_ai_metadata) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO streams (
+        user_id, name, description, source_type, playlist_id, video_id, platform, 
+        youtube_channel_id, rtmp_url, stream_key, bitrate, resolution, loop, duration, 
+        start_time, start_date, repeat_type, repeat_days, repeat_date, schedule_enabled, 
+        use_ai_metadata, youtube_playlists, youtube_made_for_kids, youtube_age_restriction, 
+        youtube_paid_promotion, youtube_altered_content, youtube_automatic_chapters, 
+        youtube_featured_places, youtube_automatic_concepts, youtube_tags, youtube_language, 
+        youtube_caption_certification, youtube_title_description_language, youtube_recording_date, 
+        youtube_recording_location, youtube_license, youtube_allow_embedding, 
+        youtube_publish_to_subscriptions, youtube_shorts_remixing, youtube_category, 
+        youtube_comments_mode, youtube_who_can_comment, youtube_sort_by
+      ) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.session.user.id, 
       name, 
@@ -1462,8 +1615,42 @@ app.post("/api/streams", requireAuth, (req, res) => {
       repeat_days, 
       repeat_date, 
       schedule_enabled ? 1 : 0,
-      use_ai_metadata !== undefined ? (use_ai_metadata ? 1 : 0) : 1
+      use_ai_metadata !== undefined ? (use_ai_metadata ? 1 : 0) : 1,
+      youtube_playlists ? JSON.stringify(youtube_playlists) : null,
+      youtube_made_for_kids ? 1 : 0,
+      youtube_age_restriction ? 1 : 0,
+      youtube_paid_promotion ? 1 : 0,
+      youtube_altered_content ? 1 : 0,
+      youtube_automatic_chapters !== undefined ? (youtube_automatic_chapters ? 1 : 0) : 1,
+      youtube_featured_places !== undefined ? (youtube_featured_places ? 1 : 0) : 1,
+      youtube_automatic_concepts !== undefined ? (youtube_automatic_concepts ? 1 : 0) : 1,
+      youtube_tags,
+      youtube_language || 'id',
+      youtube_caption_certification,
+      youtube_title_description_language || 'id',
+      youtube_recording_date,
+      youtube_recording_location,
+      youtube_license || 'youtube',
+      youtube_allow_embedding !== undefined ? (youtube_allow_embedding ? 1 : 0) : 1,
+      youtube_publish_to_subscriptions !== undefined ? (youtube_publish_to_subscriptions ? 1 : 0) : 1,
+      youtube_shorts_remixing || 'allow_video_audio',
+      youtube_category || '24',
+      youtube_comments_mode || 'on',
+      youtube_who_can_comment || 'anyone',
+      youtube_sort_by || 'top'
     );
+
+    // Mark metadata slot as used if applicable
+    if (use_ai_metadata && start_date && start_time) {
+      try {
+        const settings = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
+        const tz = settings?.value || 'UTC';
+        const date = new Date(`${start_date}T${start_time}:00`);
+        getMetadataForTime(req.session.user.id, date, tz, true); // true = mark as used
+      } catch (e) {
+        console.error("Failed to mark metadata slot as used:", e);
+      }
+    }
     
     logAction(req.session.user.id, req.session.user.username, "Stream Created", `Created stream: ${name}`);
     
@@ -1485,7 +1672,18 @@ app.post("/api/streams", requireAuth, (req, res) => {
 
 app.put("/api/streams/:id", requireAuth, (req, res) => {
   try {
-    const { name, description, source_type, playlist_id, video_id, platform, youtube_channel_id, rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, repeat_type, repeat_days, repeat_date, schedule_enabled, use_ai_metadata } = req.body;
+    const { 
+      name, description, source_type, playlist_id, video_id, platform, youtube_channel_id, 
+      rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, 
+      repeat_type, repeat_days, repeat_date, schedule_enabled, use_ai_metadata,
+      youtube_playlists, youtube_made_for_kids, youtube_age_restriction, youtube_paid_promotion,
+      youtube_altered_content, youtube_automatic_chapters, youtube_featured_places,
+      youtube_automatic_concepts, youtube_tags, youtube_language, youtube_caption_certification,
+      youtube_title_description_language, youtube_recording_date, youtube_recording_location,
+      youtube_license, youtube_allow_embedding, youtube_publish_to_subscriptions,
+      youtube_shorts_remixing, youtube_category, youtube_comments_mode,
+      youtube_who_can_comment, youtube_sort_by
+    } = req.body;
     
     if (!name) {
       return res.status(400).json({ error: "Stream name is required" });
@@ -1493,20 +1691,31 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
 
     db.prepare(`
       UPDATE streams 
-      SET name = ?, description = ?, source_type = ?, playlist_id = ?, video_id = ?, platform = ?, youtube_channel_id = ?, rtmp_url = ?, stream_key = ?, bitrate = ?, resolution = ?, loop = ?, duration = ?, start_time = ?, start_date = ?, repeat_type = ?, repeat_days = ?, repeat_date = ?, schedule_enabled = ?, use_ai_metadata = ?
+      SET name = ?, description = ?, source_type = ?, playlist_id = ?, video_id = ?, platform = ?, 
+          youtube_channel_id = ?, rtmp_url = ?, stream_key = ?, bitrate = ?, resolution = ?, 
+          loop = ?, duration = ?, start_time = ?, start_date = ?, repeat_type = ?, 
+          repeat_days = ?, repeat_date = ?, schedule_enabled = ?, use_ai_metadata = ?,
+          youtube_playlists = ?, youtube_made_for_kids = ?, youtube_age_restriction = ?, 
+          youtube_paid_promotion = ?, youtube_altered_content = ?, youtube_automatic_chapters = ?, 
+          youtube_featured_places = ?, youtube_automatic_concepts = ?, youtube_tags = ?, 
+          youtube_language = ?, youtube_caption_certification = ?, 
+          youtube_title_description_language = ?, youtube_recording_date = ?, 
+          youtube_recording_location = ?, youtube_license = ?, youtube_allow_embedding = ?, 
+          youtube_publish_to_subscriptions = ?, youtube_shorts_remixing = ?, youtube_category = ?, 
+          youtube_comments_mode = ?, youtube_who_can_comment = ?, youtube_sort_by = ?
       WHERE id = ? AND user_id = ?
     `).run(
       name, 
       description,
-      source_type, 
+      source_type || 'playlist', 
       playlist_id || null, 
       video_id || null, 
-      platform, 
+      platform || 'youtube', 
       youtube_channel_id || null, 
       rtmp_url, 
       stream_key, 
-      bitrate, 
-      resolution, 
+      bitrate || 3000, 
+      resolution || '1280x720', 
       loop ? 1 : 0, 
       duration || -1, 
       start_time, 
@@ -1516,7 +1725,29 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
       repeat_date, 
       schedule_enabled ? 1 : 0,
       use_ai_metadata !== undefined ? (use_ai_metadata ? 1 : 0) : 1,
-      req.params.id, 
+      youtube_playlists ? JSON.stringify(youtube_playlists) : null,
+      youtube_made_for_kids ? 1 : 0,
+      youtube_age_restriction ? 1 : 0,
+      youtube_paid_promotion ? 1 : 0,
+      youtube_altered_content ? 1 : 0,
+      youtube_automatic_chapters !== undefined ? (youtube_automatic_chapters ? 1 : 0) : 1,
+      youtube_featured_places !== undefined ? (youtube_featured_places ? 1 : 0) : 1,
+      youtube_automatic_concepts !== undefined ? (youtube_automatic_concepts ? 1 : 0) : 1,
+      youtube_tags,
+      youtube_language || 'id',
+      youtube_caption_certification,
+      youtube_title_description_language || 'id',
+      youtube_recording_date,
+      youtube_recording_location,
+      youtube_license || 'youtube',
+      youtube_allow_embedding !== undefined ? (youtube_allow_embedding ? 1 : 0) : 1,
+      youtube_publish_to_subscriptions !== undefined ? (youtube_publish_to_subscriptions ? 1 : 0) : 1,
+      youtube_shorts_remixing || 'allow_video_audio',
+      youtube_category || '24',
+      youtube_comments_mode || 'on',
+      youtube_who_can_comment || 'anyone',
+      youtube_sort_by || 'top',
+      req.params.id,
       req.session.user.id
     );
 
@@ -1923,9 +2154,9 @@ app.post("/api/metadata-slots/init", requireAuth, (req, res) => {
 });
 
 app.put("/api/metadata-slots/:id", requireAuth, (req, res) => {
-  const { title, description, topic, thumbnail_url } = req.body;
-  db.prepare("UPDATE metadata_slots SET title = ?, description = ?, topic = ?, thumbnail_url = ? WHERE id = ? AND user_id = ?")
-    .run(title, description, topic, thumbnail_url, req.params.id, req.session.user.id);
+  const { title, description, topic, thumbnail_url, last_number } = req.body;
+  db.prepare("UPDATE metadata_slots SET title = ?, description = ?, topic = ?, thumbnail_url = ?, last_number = ? WHERE id = ? AND user_id = ?")
+    .run(title, description, topic, thumbnail_url, last_number || 0, req.params.id, req.session.user.id);
   res.json({ success: true });
 });
 
