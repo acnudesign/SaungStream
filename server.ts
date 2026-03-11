@@ -2148,6 +2148,10 @@ setInterval(() => {
 // --- Vite Setup ---
 async function startServer() {
   // API catch-all (before Vite/Static middleware)
+  app.get("/googlee6cc427312025889.html", (req, res) => {
+    res.send("google-site-verification: googlee6cc427312025889.html");
+  });
+
   app.all("/api/*", (req, res) => {
     res.status(404).json({ error: "API route not found" });
   });
