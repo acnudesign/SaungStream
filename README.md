@@ -59,7 +59,7 @@ sudo apt install -y git
 Clone the repository and install dependencies.
 ```bash
 git clone https://github.com/acnudesign/SaungStream
-cd saungstream
+cd SaungStream
 npm install
 ```
 
