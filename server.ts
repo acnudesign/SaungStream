@@ -83,6 +83,22 @@ db.exec(`
     filepath TEXT,
     duration INTEGER,
     thumbnail_path TEXT,
+    size INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'ready', -- ready, processing, failed
+    is_pre_encoded INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS youtube_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    channel_id TEXT UNIQUE,
+    title TEXT,
+    thumbnail TEXT,
+    access_token TEXT,
+    refresh_token TEXT,
+    expiry_date INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
   );
@@ -113,8 +129,12 @@ db.exec(`
     playlist_id INTEGER,
     video_id INTEGER,
     platform TEXT DEFAULT 'youtube', -- youtube, facebook, tiktok, shopee, twitch
+    youtube_channel_id INTEGER,
+    broadcast_id TEXT,
+    youtube_stream_id TEXT,
     rtmp_url TEXT,
     stream_key TEXT,
+    description TEXT,
     bitrate INTEGER DEFAULT 3000,
     resolution TEXT DEFAULT '1280x720',
     status TEXT DEFAULT 'idle',
@@ -122,7 +142,8 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY(playlist_id) REFERENCES playlists(id),
-    FOREIGN KEY(video_id) REFERENCES media(id)
+    FOREIGN KEY(video_id) REFERENCES media(id),
+    FOREIGN KEY(youtube_channel_id) REFERENCES youtube_channels(id) ON DELETE SET NULL
   );
 
   CREATE TABLE IF NOT EXISTS stream_schedules (
@@ -171,7 +192,7 @@ db.exec(`
 
 // --- Migrations ---
 const migrate = () => {
-  const tables = ["users", "media", "playlists", "streams", "logs"];
+  const tables = ["users", "media", "playlists", "streams", "logs", "metadata_slots"];
   tables.forEach(table => {
     const tableInfo = db.prepare(`PRAGMA table_info(${table})`).all() as any[];
     const columns = tableInfo.map(c => c.name);
@@ -189,10 +210,20 @@ const migrate = () => {
       if (!columns.includes("lockout_until")) db.prepare("ALTER TABLE users ADD COLUMN lockout_until DATETIME").run();
     }
     
+    if (table === "media") {
+      if (!columns.includes("status")) db.prepare("ALTER TABLE media ADD COLUMN status TEXT DEFAULT 'ready'").run();
+      if (!columns.includes("is_pre_encoded")) db.prepare("ALTER TABLE media ADD COLUMN is_pre_encoded INTEGER DEFAULT 0").run();
+      if (!columns.includes("size")) db.prepare("ALTER TABLE media ADD COLUMN size INTEGER DEFAULT 0").run();
+    }
+    
     if (table === "streams") {
       if (!columns.includes("source_type")) db.prepare("ALTER TABLE streams ADD COLUMN source_type TEXT DEFAULT 'playlist'").run();
       if (!columns.includes("video_id")) db.prepare("ALTER TABLE streams ADD COLUMN video_id INTEGER").run();
       if (!columns.includes("platform")) db.prepare("ALTER TABLE streams ADD COLUMN platform TEXT DEFAULT 'youtube'").run();
+      if (!columns.includes("youtube_channel_id")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_channel_id INTEGER").run();
+      if (!columns.includes("broadcast_id")) db.prepare("ALTER TABLE streams ADD COLUMN broadcast_id TEXT").run();
+      if (!columns.includes("youtube_stream_id")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_stream_id TEXT").run();
+      if (!columns.includes("description")) db.prepare("ALTER TABLE streams ADD COLUMN description TEXT").run();
       if (!columns.includes("loop")) db.prepare("ALTER TABLE streams ADD COLUMN loop INTEGER DEFAULT 1").run();
       if (!columns.includes("duration")) db.prepare("ALTER TABLE streams ADD COLUMN duration REAL DEFAULT -1").run();
       if (!columns.includes("started_at")) db.prepare("ALTER TABLE streams ADD COLUMN started_at DATETIME").run();
@@ -204,7 +235,14 @@ const migrate = () => {
       if (!columns.includes("schedule_enabled")) db.prepare("ALTER TABLE streams ADD COLUMN schedule_enabled INTEGER DEFAULT 0").run();
       if (!columns.includes("last_triggered")) db.prepare("ALTER TABLE streams ADD COLUMN last_triggered TEXT").run();
       if (!columns.includes("network_optimization")) db.prepare("ALTER TABLE streams ADD COLUMN network_optimization INTEGER DEFAULT 1").run();
+      if (!columns.includes("use_ai_metadata")) db.prepare("ALTER TABLE streams ADD COLUMN use_ai_metadata INTEGER DEFAULT 1").run();
     }
+
+    if (table === "metadata_slots") {
+      if (!columns.includes("is_used")) db.prepare("ALTER TABLE metadata_slots ADD COLUMN is_used INTEGER DEFAULT 0").run();
+      if (!columns.includes("last_used_at")) db.prepare("ALTER TABLE metadata_slots ADD COLUMN last_used_at DATETIME").run();
+    }
+
     if (table === "logs") {
       if (!columns.includes("username")) db.prepare("ALTER TABLE logs ADD COLUMN username TEXT").run();
       if (!columns.includes("action")) db.prepare("ALTER TABLE logs ADD COLUMN action TEXT").run();
@@ -273,6 +311,7 @@ if (!adminUser) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json());
 app.use(session({
   secret: "saungstream-secret",
@@ -309,6 +348,138 @@ const requireAdmin = (req: any, res: any, next: any) => {
   }
 };
 
+// --- Automation Helpers ---
+const getISOWithOffset = (dateStr: string, timeStr: string, tz: string) => {
+  try {
+    const date = new Date(`${dateStr}T${timeStr}:00`);
+    // Get the offset in minutes for the given timezone at the given date
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      timeZoneName: 'longOffset'
+    }).formatToParts(date);
+    
+    const offsetPart = parts.find(p => p.type === 'timeZoneName')?.value || "";
+    // offsetPart is like "GMT+07:00" or "GMT-05:00" or "GMT"
+    let offset = "+00:00";
+    if (offsetPart.includes("+")) offset = offsetPart.split("+")[1];
+    else if (offsetPart.includes("-")) offset = "-" + offsetPart.split("-")[1];
+    
+    if (offset === "GMT") offset = "+00:00";
+    if (offset.length === 5 && !offset.includes(":")) offset = offset.slice(0, 3) + ":" + offset.slice(3);
+    if (!offset.includes(":")) offset += ":00";
+    if (!offset.startsWith("+") && !offset.startsWith("-")) offset = "+" + offset;
+
+    return `${dateStr}T${timeStr}:00${offset}`;
+  } catch (e) {
+    return new Date(`${dateStr}T${timeStr}:00Z`).toISOString();
+  }
+};
+
+const getMetadataForTime = (userId: number, date: Date, timezone: string, markAsUsed: boolean = false) => {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      hour12: false,
+      hour: '2-digit',
+      weekday: 'short'
+    });
+    const parts = formatter.formatToParts(date);
+    const dateParts: any = {};
+    parts.forEach(p => dateParts[p.type] = p.value);
+    
+    const dayMap: any = { 'Sun': 0, 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6 };
+    const dayOfWeek = dayMap[dateParts.weekday] ?? date.getDay();
+    const hour = parseInt(dateParts.hour);
+    
+    // Map 24 hours to 10 slots (2.4 hours per slot)
+    const slotIndex = Math.min(9, Math.floor(hour / 2.4));
+    
+    // Find an unused slot for this time, or fallback to any slot if all are used
+    let slot = db.prepare(`
+      SELECT * FROM metadata_slots 
+      WHERE user_id = ? AND day_of_week = ? AND slot_index = ? AND is_used = 0
+    `).get(userId, dayOfWeek, slotIndex) as any;
+
+    if (!slot) {
+      // Fallback: pick the slot even if used, but prefer unused ones from other slots if possible?
+      // User said "ngga boleh ada yang dabel kepake", so if all are used, maybe we should alert or just reuse.
+      slot = db.prepare(`
+        SELECT * FROM metadata_slots 
+        WHERE user_id = ? AND day_of_week = ? AND slot_index = ?
+      `).get(userId, dayOfWeek, slotIndex) as any;
+    }
+      
+    if (slot && markAsUsed) {
+      db.prepare("UPDATE metadata_slots SET is_used = 1, last_used_at = CURRENT_TIMESTAMP WHERE id = ?").run(slot.id);
+    }
+
+    return slot || null;
+  } catch (e) {
+    console.error("Error fetching metadata slot:", e);
+    return null;
+  }
+};
+
+const calculateNextRun = (stream: any, tz: string) => {
+  const now = new Date();
+  let nextRun = new Date();
+  
+  // Parse current scheduled time
+  const [h, m] = (stream.start_time || "00:00").split(":").map(Number);
+  const [year, month, day] = (stream.start_date || new Date().toISOString().slice(0, 10)).split("-").map(Number);
+  
+  // Create a date object for the current scheduled run in the target timezone
+  // This is tricky because JS Date is UTC-based. We use a helper to get the "local" time components.
+  const getLocalTime = (date: Date, timeZone: string) => {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false
+    });
+    const parts = fmt.formatToParts(date);
+    const p: any = {};
+    parts.forEach(part => p[part.type] = part.value);
+    return new Date(`${p.year}-${p.month.padStart(2, '0')}-${p.day.padStart(2, '0')}T${p.hour.padStart(2, '0')}:${p.minute.padStart(2, '0')}:${p.second.padStart(2, '0')}`);
+  };
+
+  // For simplicity, we'll work with the current scheduled date/time and add intervals
+  let baseDate = new Date(`${stream.start_date}T${stream.start_time}:00`);
+  
+  const intervalMap: any = { 
+    "10min": 10, "30min": 30, "1hour": 60, "6hours": 360, "12hours": 720,
+    "daily": 1440
+  };
+
+  if (intervalMap[stream.repeat_type]) {
+    const minutes = intervalMap[stream.repeat_type];
+    baseDate.setMinutes(baseDate.getMinutes() + minutes);
+    // Ensure it's in the future
+    while (baseDate <= now) {
+      baseDate.setMinutes(baseDate.getMinutes() + minutes);
+    }
+  } else if (stream.repeat_type === "weekly") {
+    const allowedDays = (stream.repeat_days || "").split(",").map(d => d.toLowerCase());
+    const dayNames = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    
+    baseDate.setDate(baseDate.getDate() + 1); // Start checking from tomorrow
+    while (baseDate <= now || !allowedDays.includes(dayNames[baseDate.getDay()])) {
+      baseDate.setDate(baseDate.getDate() + 1);
+    }
+  } else if (stream.repeat_type === "monthly") {
+    baseDate.setMonth(baseDate.getMonth() + 1);
+    baseDate.setDate(stream.repeat_date || 1);
+    while (baseDate <= now) {
+      baseDate.setMonth(baseDate.getMonth() + 1);
+    }
+  } else {
+    return null; // No next run
+  }
+
+  return {
+    date: baseDate.toISOString().slice(0, 10),
+    time: baseDate.toTimeString().slice(0, 5),
+    fullDate: baseDate
+  };
+};
+
 // --- FFmpeg Stream Manager ---
 // --- Logging Helper ---
 const logAction = (userId: number, username: string, action: string, message: string, type: string = 'info') => {
@@ -319,7 +490,7 @@ const logAction = (userId: number, username: string, action: string, message: st
 class StreamManager {
   private activeStreams: Map<number, ChildProcess> = new Map();
 
-  startStream(streamId: number) {
+  async startStream(streamId: number) {
     if (this.activeStreams.has(streamId)) return;
 
     const stream = db.prepare(`
@@ -330,20 +501,55 @@ class StreamManager {
     `).get(streamId) as any;
     if (!stream) return;
 
+    // Automate YouTube if channel is selected
+    if (stream.platform === 'youtube' && stream.youtube_channel_id && !stream.rtmp_url) {
+      try {
+        await createYouTubeBroadcast(streamId);
+        // Refresh stream data
+        const updatedStream = db.prepare("SELECT * FROM streams WHERE id = ?").get(streamId) as any;
+        Object.assign(stream, updatedStream);
+      } catch (err) {
+        this.log(stream.user_id, "error", `Failed to automate YouTube for ${stream.name}: ${err}`);
+        return;
+      }
+    }
+
     let inputArgs: string[] = [];
     let loopFlag: string[] = [];
+    let codecArgs: string[] = [];
 
     if (stream.source_type === 'video') {
-      const video = db.prepare("SELECT filepath FROM media WHERE id = ?").get(stream.video_id) as any;
+      const video = db.prepare("SELECT * FROM media WHERE id = ?").get(stream.video_id) as any;
       if (!video) {
         this.log(stream.user_id, "error", `Stream ${stream.name} video source not found.`);
         return;
       }
       if (stream.loop) loopFlag = ["-stream_loop", "-1"];
       inputArgs = ["-i", video.filepath];
+
+      if (video.is_pre_encoded) {
+        codecArgs = ["-c", "copy"];
+      } else {
+        const [width, height] = (stream.resolution || "1280x720").split("x");
+        const useOptimization = stream.network_optimization !== 0;
+        codecArgs = [
+          "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+          "-c:v", "libx264",
+          "-preset", useOptimization ? "ultrafast" : "veryfast",
+          "-tune", useOptimization ? "zerolatency" : "main",
+          "-b:v", `${stream.bitrate}k`,
+          "-maxrate", `${stream.bitrate}k`,
+          "-bufsize", useOptimization ? `${stream.bitrate}k` : `${stream.bitrate * 2}k`,
+          "-pix_fmt", "yuv420p",
+          "-g", "60",
+          "-c:a", "aac",
+          "-b:a", "128k",
+          "-ar", "44100"
+        ];
+      }
     } else {
       const playlistItems = db.prepare(`
-        SELECT m.filepath 
+        SELECT m.* 
         FROM playlist_items pi 
         JOIN media m ON pi.media_id = m.id 
         WHERE pi.playlist_id = ? 
@@ -361,30 +567,38 @@ class StreamManager {
       
       if (stream.playlist_loop || stream.loop) loopFlag = ["-stream_loop", "-1"];
       inputArgs = ["-f", "concat", "-safe", "0", "-i", playlistFile];
+
+      // For playlists, we usually re-encode to ensure transitions are smooth unless all items are identical in format
+      const allPreEncoded = playlistItems.every(item => item.is_pre_encoded);
+      if (allPreEncoded) {
+        codecArgs = ["-c", "copy"];
+      } else {
+        const [width, height] = (stream.resolution || "1280x720").split("x");
+        const useOptimization = stream.network_optimization !== 0;
+        codecArgs = [
+          "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+          "-c:v", "libx264",
+          "-preset", useOptimization ? "ultrafast" : "veryfast",
+          "-tune", useOptimization ? "zerolatency" : "main",
+          "-b:v", `${stream.bitrate}k`,
+          "-maxrate", `${stream.bitrate}k`,
+          "-bufsize", useOptimization ? `${stream.bitrate}k` : `${stream.bitrate * 2}k`,
+          "-pix_fmt", "yuv420p",
+          "-g", "60",
+          "-c:a", "aac",
+          "-b:a", "128k",
+          "-ar", "44100"
+        ];
+      }
     }
 
     const rtmpDestination = `${stream.rtmp_url}/${stream.stream_key}`;
-    const [width, height] = (stream.resolution || "1280x720").split("x");
-    
-    // Network Optimization Flags
-    const useOptimization = stream.network_optimization !== 0;
     
     const args = [
       "-re",
       ...loopFlag,
       ...inputArgs,
-      "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
-      "-c:v", "libx264",
-      "-preset", useOptimization ? "ultrafast" : "veryfast",
-      "-tune", useOptimization ? "zerolatency" : "main",
-      "-b:v", `${stream.bitrate}k`,
-      "-maxrate", `${stream.bitrate}k`,
-      "-bufsize", useOptimization ? `${stream.bitrate}k` : `${stream.bitrate * 2}k`,
-      "-pix_fmt", "yuv420p",
-      "-g", "60",
-      "-c:a", "aac",
-      "-b:a", "128k",
-      "-ar", "44100",
+      ...codecArgs,
       "-f", "flv",
       rtmpDestination
     ];
@@ -414,7 +628,7 @@ class StreamManager {
 
     ffmpegProcess.on("close", (code) => {
       this.activeStreams.delete(streamId);
-      const currentStream = db.prepare("SELECT status FROM streams WHERE id = ?").get(streamId) as any;
+      const currentStream = db.prepare("SELECT * FROM streams WHERE id = ?").get(streamId) as any;
       
       if (currentStream && currentStream.status === 'live') {
         const lastError = errorOutput.split("\n").filter(l => l.toLowerCase().includes("error")).slice(-3).join(" | ");
@@ -423,6 +637,11 @@ class StreamManager {
       } else {
         db.prepare("UPDATE streams SET status = 'idle', started_at = NULL WHERE id = ?").run(streamId);
         this.log(stream.user_id, "info", `Stream ${stream.name} stopped.`);
+        
+        // Handle Repetition via Duplication
+        if (currentStream && currentStream.repeat_type !== 'none' && currentStream.schedule_enabled === 1) {
+          this.handleRepetition(currentStream);
+        }
       }
       
       const playlistFile = path.join(__dirname, `playlist_${streamId}.txt`);
@@ -437,7 +656,9 @@ class StreamManager {
   }
 
   stopStream(streamId: number) {
+    const currentStream = db.prepare("SELECT * FROM streams WHERE id = ?").get(streamId) as any;
     db.prepare("UPDATE streams SET status = 'idle', started_at = NULL WHERE id = ?").run(streamId);
+    
     const process = this.activeStreams.get(streamId);
     if (process) {
       try {
@@ -456,6 +677,72 @@ class StreamManager {
         console.error(`Failed to stop stream ${streamId}`, e);
       }
       this.activeStreams.delete(streamId);
+    }
+  }
+
+  private async handleRepetition(stream: any) {
+    try {
+      const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
+      const tz = timezone ? timezone.value : "UTC";
+      
+      const nextRun = calculateNextRun(stream, tz);
+      if (!nextRun) {
+        // If no next run (e.g. repeat_type 'none'), just disable scheduling
+        db.prepare("UPDATE streams SET schedule_enabled = 0 WHERE id = ?").run(stream.id);
+        return;
+      }
+
+      // Pick metadata for the next run
+      let newName = stream.name;
+      let newDescription = stream.description;
+
+      if (stream.use_ai_metadata === 1) {
+        const metadata = getMetadataForTime(stream.user_id, nextRun.fullDate, tz, true);
+        if (metadata) {
+          newName = metadata.title || stream.name;
+          newDescription = metadata.description || stream.description;
+        }
+      }
+      
+      // OVERWRITE the existing ticket with the next schedule
+      db.prepare(`
+        UPDATE streams 
+        SET 
+          name = ?, 
+          description = ?, 
+          start_time = ?, 
+          start_date = ?, 
+          status = 'idle', 
+          started_at = NULL, 
+          last_triggered = NULL,
+          broadcast_id = NULL,
+          youtube_stream_id = NULL
+        WHERE id = ?
+      `).run(
+        newName, 
+        newDescription,
+        nextRun.time, 
+        nextRun.date, 
+        stream.id
+      );
+
+      this.log(stream.user_id, "info", `Stream "${stream.name}" rescheduled to ${nextRun.date} ${nextRun.time} (Overwrite Mode)`);
+      
+      // Auto-schedule on YouTube if applicable for the NEW time
+      if (stream.platform === 'youtube' && stream.youtube_channel_id) {
+        try {
+          // Small delay to ensure DB is committed
+          setTimeout(async () => {
+            await createYouTubeBroadcast(stream.id);
+            this.log(stream.user_id, "info", `Automatically scheduled next YouTube broadcast: ${newName}`);
+          }, 2000);
+        } catch (err) {
+          this.log(stream.user_id, "error", `Failed to auto-schedule next YouTube broadcast: ${err}`);
+        }
+      }
+    } catch (err) {
+      console.error("Error handling stream repetition:", err);
+      this.log(stream.user_id, "error", `Failed to create duplicate stream ticket: ${err}`);
     }
   }
 
@@ -499,7 +786,244 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("Unhandled Rejection at:", promise, "reason:", reason);
 });
 
-// --- API Routes ---
+import { google } from "googleapis";
+
+const getOAuth2Client = (req: any) => {
+  // Detect protocol and host dynamically to support custom domains like app.saungstream.my.id
+  const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
+  const host = req.get('x-forwarded-host') || req.get('host');
+  const redirectUri = `${protocol}://${host}/api/auth/youtube/callback`;
+  
+  return new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    redirectUri
+  );
+};
+
+const YOUTUBE_SCOPES = [
+  "https://www.googleapis.com/auth/youtube.force-ssl",
+  "https://www.googleapis.com/auth/youtube.readonly",
+  "https://www.googleapis.com/auth/userinfo.profile"
+];
+
+// --- YouTube OAuth Routes ---
+app.get("/api/auth/youtube", requireAuth, (req, res) => {
+  const client = getOAuth2Client(req);
+  const url = client.generateAuthUrl({
+    access_type: "offline",
+    scope: YOUTUBE_SCOPES,
+    prompt: "consent",
+    state: req.session.user.id.toString()
+  });
+  res.json({ url });
+});
+
+app.get("/api/auth/youtube/callback", async (req, res) => {
+  const { code, state } = req.query;
+  const userId = parseInt(state as string);
+  const client = getOAuth2Client(req);
+
+  try {
+    const { tokens } = await client.getToken(code as string);
+    client.setCredentials(tokens);
+
+    const youtube = google.youtube({ version: "v3", auth: client });
+    const channelRes = await youtube.channels.list({
+      part: ["snippet", "contentDetails"],
+      mine: true
+    });
+
+    const channel = channelRes.data.items?.[0];
+    if (!channel) throw new Error("No YouTube channel found");
+
+    db.prepare(`
+      INSERT OR REPLACE INTO youtube_channels 
+      (user_id, channel_id, title, thumbnail, access_token, refresh_token, expiry_date) 
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      userId,
+      channel.id,
+      channel.snippet?.title,
+      channel.snippet?.thumbnails?.default?.url,
+      tokens.access_token,
+      tokens.refresh_token || db.prepare("SELECT refresh_token FROM youtube_channels WHERE channel_id = ?").get(channel.id)?.refresh_token,
+      tokens.expiry_date
+    );
+
+    res.send(`
+      <html>
+        <body>
+          <script>
+            window.opener.postMessage({ type: 'YOUTUBE_AUTH_SUCCESS' }, '*');
+            window.close();
+          </script>
+          <p>YouTube Channel connected successfully! You can close this window.</p>
+        </body>
+      </html>
+    `);
+  } catch (err) {
+    console.error("YouTube OAuth callback error:", err);
+    res.status(500).send("Authentication failed. Please try again.");
+  }
+});
+
+app.get("/api/youtube/channels", requireAuth, (req, res) => {
+  const channels = db.prepare("SELECT id, channel_id, title, thumbnail FROM youtube_channels WHERE user_id = ?").all(req.session.user.id);
+  res.json(channels);
+});
+
+app.delete("/api/youtube/channels/:id", requireAuth, (req, res) => {
+  db.prepare("DELETE FROM youtube_channels WHERE id = ? AND user_id = ?").run(req.params.id, req.session.user.id);
+  res.json({ success: true });
+});
+
+// --- Pre-encoding Pipeline ---
+const encodeVideo = async (mediaId: number) => {
+  const media = db.prepare("SELECT * FROM media WHERE id = ?").get(mediaId) as any;
+  if (!media) return;
+
+  const inputPath = media.filepath;
+  const outputPath = path.join(UPLOADS_DIR, `encoded_${media.filename}`);
+
+  db.prepare("UPDATE media SET status = 'processing' WHERE id = ?").run(mediaId);
+
+  ffmpeg(inputPath)
+    .outputOptions([
+      "-c:v libx264",
+      "-preset fast",
+      "-b:v 4000k",
+      "-maxrate 4000k",
+      "-bufsize 8000k",
+      "-pix_fmt yuv420p",
+      "-g 60",
+      "-c:a aac",
+      "-b:a 128k",
+      "-ar 44100",
+      "-movflags +faststart"
+    ])
+    .on("start", (commandLine) => {
+      console.log("Spawned FFmpeg with command: " + commandLine);
+    })
+    .on("error", (err) => {
+      console.error("Encoding error:", err);
+      db.prepare("UPDATE media SET status = 'failed' WHERE id = ?").run(mediaId);
+    })
+    .on("end", () => {
+      console.log("Encoding finished!");
+      // Replace original file with encoded one or keep both? 
+      // User wants "normalized to a streaming-ready format".
+      // I'll replace it to save space and ensure consistency.
+      try {
+        fs.unlinkSync(inputPath);
+        fs.renameSync(outputPath, inputPath);
+        db.prepare("UPDATE media SET status = 'ready', is_pre_encoded = 1 WHERE id = ?").run(mediaId);
+      } catch (e) {
+        console.error("Failed to swap encoded file:", e);
+        db.prepare("UPDATE media SET status = 'failed' WHERE id = ?").run(mediaId);
+      }
+    })
+    .save(outputPath);
+};
+
+// --- YouTube Automation Helper ---
+async function getYouTubeClient(channelId: number) {
+  const channel = db.prepare("SELECT * FROM youtube_channels WHERE id = ?").get(channelId) as any;
+  if (!channel) throw new Error("Channel not found");
+
+  const auth = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+  );
+
+  auth.setCredentials({
+    access_token: channel.access_token,
+    refresh_token: channel.refresh_token,
+    expiry_date: channel.expiry_date
+  });
+
+  // Check if token needs refresh
+  if (channel.expiry_date && channel.expiry_date <= Date.now() + 60000) {
+    const { credentials } = await auth.refreshAccessToken();
+    db.prepare(`
+      UPDATE youtube_channels 
+      SET access_token = ?, expiry_date = ? 
+      WHERE id = ?
+    `).run(credentials.access_token, credentials.expiry_date, channelId);
+  }
+
+  return google.youtube({ version: "v3", auth });
+}
+
+async function createYouTubeBroadcast(streamId: number) {
+  const stream = db.prepare("SELECT * FROM streams WHERE id = ?").get(streamId) as any;
+  if (!stream || !stream.youtube_channel_id) return;
+
+  try {
+    const youtube = await getYouTubeClient(stream.youtube_channel_id);
+    
+    const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
+    const tz = timezone ? timezone.value : "UTC";
+    const scheduledTime = getISOWithOffset(stream.start_date, stream.start_time, tz);
+
+    // 1. Create Broadcast
+    const broadcastRes = await youtube.liveBroadcasts.insert({
+      part: ["snippet", "status", "contentDetails"],
+      requestBody: {
+        snippet: {
+          title: stream.name,
+          scheduledStartTime: scheduledTime,
+          description: stream.description || "Live Stream via SaungStream"
+        },
+        status: {
+          privacyStatus: "public",
+          selfDeclaredMadeForKids: false
+        },
+        contentDetails: {
+          enableAutoStart: true,
+          enableAutoStop: true
+        }
+      }
+    });
+
+    const broadcastId = broadcastRes.data.id;
+
+    // 2. Create Stream
+    const streamRes = await youtube.liveStreams.insert({
+      part: ["snippet", "cdn", "contentDetails"],
+      requestBody: {
+        snippet: { title: stream.name },
+        cdn: {
+          frameRate: "30fps",
+          ingestionType: "rtmp",
+          resolution: "720p"
+        }
+      }
+    });
+
+    const youtubeStreamId = streamRes.data.id;
+    const rtmpUrl = streamRes.data.cdn?.ingestionInfo?.ingestionAddress;
+    const streamKey = streamRes.data.cdn?.ingestionInfo?.streamName;
+
+    // 3. Bind
+    await youtube.liveBroadcasts.bind({
+      id: broadcastId!,
+      part: ["id", "contentDetails"],
+      streamId: youtubeStreamId!
+    });
+
+    db.prepare(`
+      UPDATE streams 
+      SET broadcast_id = ?, youtube_stream_id = ?, rtmp_url = ?, stream_key = ? 
+      WHERE id = ?
+    `).run(broadcastId, youtubeStreamId, rtmpUrl, streamKey, streamId);
+
+    return { rtmpUrl, streamKey };
+  } catch (err) {
+    console.error("Failed to automate YouTube broadcast:", err);
+    throw err;
+  }
+}
 
 // Auth
 app.post("/api/login", (req, res) => {
@@ -658,16 +1182,14 @@ app.post("/api/media/upload", requireAuth, upload.single("file"), (req, res) => 
   const userId = req.session.user.id;
   const user = db.prepare("SELECT storage_limit FROM users WHERE id = ?").get(userId) as any;
   
-  const mediaFiles = db.prepare("SELECT filepath FROM media WHERE user_id = ?").all(userId) as any[];
-  let totalUsage = 0;
-  mediaFiles.forEach(m => {
-    if (fs.existsSync(m.filepath)) totalUsage += fs.statSync(m.filepath).size;
-  });
+  // Calculate current storage usage using the size column
+  const mediaUsage = db.prepare("SELECT SUM(size) as total_size FROM media WHERE user_id = ?").get(userId) as any;
+  const totalUsage = mediaUsage.total_size || 0;
 
-  const limitBytes = user.storage_limit * 1024 * 1024 * 1024;
+  const limitBytes = (user.storage_limit || 10) * 1024 * 1024 * 1024;
   if (totalUsage + req.file.size > limitBytes) {
     fs.unlinkSync(req.file.path);
-    return res.status(400).json({ error: "Storage limit exceeded" });
+    return res.status(400).json({ error: "Storage limit exceeded. Your storage is full." });
   }
 
   const filepath = req.file.path;
@@ -684,15 +1206,37 @@ app.post("/api/media/upload", requireAuth, upload.single("file"), (req, res) => 
     .on("end", () => {
       ffmpeg.ffprobe(filepath, (err, metadata) => {
         const duration = metadata?.format?.duration || 0;
-        db.prepare("INSERT INTO media (user_id, filename, filepath, duration, thumbnail_path) VALUES (?, ?, ?, ?, ?)")
-          .run(userId, filename, filepath, Math.round(duration), thumbnailName);
+        const result = db.prepare("INSERT INTO media (user_id, filename, filepath, duration, thumbnail_path, size, status) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(userId, filename, filepath, Math.round(duration), thumbnailName, req.file.size, 'ready');
         logAction(userId, req.session.user.username, "Media Uploaded", `Uploaded ${filename}`);
+        
+        // Trigger pre-encoding
+        encodeVideo(Number(result.lastInsertRowid));
+        
         res.json({ success: true });
       });
     })
     .on("error", (err) => {
       res.status(500).json({ error: "Failed to process video" });
     });
+});
+
+app.get("/api/user/storage", requireAuth, (req, res) => {
+  const userId = req.session.user.id;
+  const user = db.prepare("SELECT storage_limit FROM users WHERE id = ?").get(userId) as any;
+  if (!user) return res.status(404).json({ error: "User not found" });
+  
+  const media = db.prepare("SELECT SUM(size) as total_size FROM media WHERE user_id = ?").get(userId) as any;
+  
+  const totalSize = media.total_size || 0;
+  const limitBytes = (user.storage_limit || 10) * 1024 * 1024 * 1024;
+  const percentage = Math.min(100, (totalSize / limitBytes) * 100);
+  
+  res.json({
+    used: totalSize,
+    limit: limitBytes,
+    percentage: parseFloat(percentage.toFixed(2))
+  });
 });
 
 app.get("/api/media", requireAuth, (req, res) => {
@@ -796,6 +1340,23 @@ app.delete("/api/playlists/:id", requireAuth, (req, res) => {
   res.json({ success: true });
 });
 
+app.get("/api/metadata/fetch", requireAuth, (req, res) => {
+  const { date, time } = req.query;
+  if (!date || !time) return res.status(400).json({ error: "Date and time are required" });
+
+  try {
+    const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
+    const tz = timezone ? timezone.value : "UTC";
+    
+    const targetDate = new Date(`${date}T${time}:00`);
+    const metadata = getMetadataForTime(req.session.user.id, targetDate, tz);
+    
+    res.json(metadata || { title: "", description: "" });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch metadata" });
+  }
+});
+
 // Streams
 app.get("/api/streams", requireAuth, (req, res) => {
   const streams = db.prepare(`
@@ -810,23 +1371,109 @@ app.get("/api/streams", requireAuth, (req, res) => {
 });
 
 app.post("/api/streams", requireAuth, (req, res) => {
-  const { name, source_type, playlist_id, video_id, platform, rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, repeat_type, repeat_days, repeat_date, schedule_enabled } = req.body;
-  const result = db.prepare(`
-    INSERT INTO streams (user_id, name, source_type, playlist_id, video_id, platform, rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, repeat_type, repeat_days, repeat_date, schedule_enabled) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(req.session.user.id, name, source_type || 'playlist', playlist_id, video_id, platform || 'youtube', rtmp_url, stream_key, bitrate || 3000, resolution || '1280x720', loop ? 1 : 0, duration || -1, start_time, start_date, repeat_type || 'none', repeat_days, repeat_date, schedule_enabled ? 1 : 0);
-  logAction(req.session.user.id, req.session.user.username, "Stream Created", `Created stream: ${name}`);
-  res.json({ id: result.lastInsertRowid });
+  try {
+    const { name, description, source_type, playlist_id, video_id, platform, youtube_channel_id, rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, repeat_type, repeat_days, repeat_date, schedule_enabled, use_ai_metadata } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: "Stream name is required" });
+    }
+
+    const result = db.prepare(`
+      INSERT INTO streams (user_id, name, description, source_type, playlist_id, video_id, platform, youtube_channel_id, rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, repeat_type, repeat_days, repeat_date, schedule_enabled, use_ai_metadata) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      req.session.user.id, 
+      name, 
+      description,
+      source_type || 'playlist', 
+      playlist_id || null, 
+      video_id || null, 
+      platform || 'youtube', 
+      youtube_channel_id || null, 
+      rtmp_url, 
+      stream_key, 
+      bitrate || 3000, 
+      resolution || '1280x720', 
+      loop ? 1 : 0, 
+      duration || -1, 
+      start_time, 
+      start_date, 
+      repeat_type || 'none', 
+      repeat_days, 
+      repeat_date, 
+      schedule_enabled ? 1 : 0,
+      use_ai_metadata !== undefined ? (use_ai_metadata ? 1 : 0) : 1
+    );
+    
+    logAction(req.session.user.id, req.session.user.username, "Stream Created", `Created stream: ${name}`);
+    
+    const newStreamId = Number(result.lastInsertRowid);
+    
+    // Auto-schedule on YouTube if applicable
+    if (platform === 'youtube' && youtube_channel_id && schedule_enabled) {
+      createYouTubeBroadcast(newStreamId).catch(err => {
+        console.error("Failed to auto-schedule YouTube broadcast on creation:", err);
+      });
+    }
+
+    res.json({ id: newStreamId });
+  } catch (err) {
+    console.error("Error creating stream:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Failed to create stream" });
+  }
 });
 
 app.put("/api/streams/:id", requireAuth, (req, res) => {
-  const { name, source_type, playlist_id, video_id, platform, rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, repeat_type, repeat_days, repeat_date, schedule_enabled } = req.body;
-  db.prepare(`
-    UPDATE streams 
-    SET name = ?, source_type = ?, playlist_id = ?, video_id = ?, platform = ?, rtmp_url = ?, stream_key = ?, bitrate = ?, resolution = ?, loop = ?, duration = ?, start_time = ?, start_date = ?, repeat_type = ?, repeat_days = ?, repeat_date = ?, schedule_enabled = ?
-    WHERE id = ? AND user_id = ?
-  `).run(name, source_type, playlist_id, video_id, platform, rtmp_url, stream_key, bitrate, resolution, loop ? 1 : 0, duration || -1, start_time, start_date, repeat_type || 'none', repeat_days, repeat_date, schedule_enabled ? 1 : 0, req.params.id, req.session.user.id);
-  res.json({ success: true });
+  try {
+    const { name, description, source_type, playlist_id, video_id, platform, youtube_channel_id, rtmp_url, stream_key, bitrate, resolution, loop, duration, start_time, start_date, repeat_type, repeat_days, repeat_date, schedule_enabled, use_ai_metadata } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: "Stream name is required" });
+    }
+
+    db.prepare(`
+      UPDATE streams 
+      SET name = ?, description = ?, source_type = ?, playlist_id = ?, video_id = ?, platform = ?, youtube_channel_id = ?, rtmp_url = ?, stream_key = ?, bitrate = ?, resolution = ?, loop = ?, duration = ?, start_time = ?, start_date = ?, repeat_type = ?, repeat_days = ?, repeat_date = ?, schedule_enabled = ?, use_ai_metadata = ?
+      WHERE id = ? AND user_id = ?
+    `).run(
+      name, 
+      description,
+      source_type, 
+      playlist_id || null, 
+      video_id || null, 
+      platform, 
+      youtube_channel_id || null, 
+      rtmp_url, 
+      stream_key, 
+      bitrate, 
+      resolution, 
+      loop ? 1 : 0, 
+      duration || -1, 
+      start_time, 
+      start_date, 
+      repeat_type || 'none', 
+      repeat_days, 
+      repeat_date, 
+      schedule_enabled ? 1 : 0,
+      use_ai_metadata !== undefined ? (use_ai_metadata ? 1 : 0) : 1,
+      req.params.id, 
+      req.session.user.id
+    );
+
+    // Re-schedule on YouTube if applicable and not already scheduled/live
+    const streamId = Number(req.params.id);
+    const updatedStream = db.prepare("SELECT * FROM streams WHERE id = ?").get(streamId) as any;
+    if (platform === 'youtube' && youtube_channel_id && schedule_enabled && !updatedStream.broadcast_id) {
+      createYouTubeBroadcast(streamId).catch(err => {
+        console.error("Failed to auto-schedule YouTube broadcast on update:", err);
+      });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error updating stream:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Failed to update stream" });
+  }
 });
 
 app.post("/api/streams/:id/start", requireAuth, (req, res) => {
@@ -1222,6 +1869,64 @@ app.put("/api/metadata-slots/:id", requireAuth, (req, res) => {
   res.json({ success: true });
 });
 
+app.post("/api/metadata-slots/generate-day", requireAuth, async (req, res) => {
+  const { dayOfWeek, topic } = req.body;
+  if (dayOfWeek === undefined || !topic) return res.status(400).json({ error: "Day and Topic are required" });
+
+  try {
+    const setting = db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get() as any;
+    const apiKey = setting?.value || process.env.GEMINI_API_KEY;
+    
+    if (!apiKey) {
+      return res.status(400).json({ error: "Gemini API Key is not configured." });
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    
+    // Fetch all slots for this day
+    const slots = db.prepare("SELECT id, slot_index FROM metadata_slots WHERE user_id = ? AND day_of_week = ? ORDER BY slot_index ASC")
+      .all(req.session.user.id, dayOfWeek) as any[];
+
+    if (slots.length === 0) return res.status(404).json({ error: "No slots found for this day." });
+
+    // Generate 10 variations in one go
+    const textResponse = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `Generate 10 unique YouTube stream titles and detailed descriptions for a live stream about: ${topic}. 
+      The variations should be suitable for different times of the day (morning, afternoon, evening).
+      Return the result in JSON format as an array of 10 objects, each with keys "title" and "description".`,
+      config: { responseMimeType: "application/json" }
+    });
+
+    const variations = JSON.parse(textResponse.text || "[]");
+    
+    if (!Array.isArray(variations) || variations.length === 0) {
+      throw new Error("Invalid AI response format");
+    }
+
+    // Update each slot
+    const updateStmt = db.prepare("UPDATE metadata_slots SET title = ?, description = ?, topic = ?, is_used = 0 WHERE id = ?");
+    
+    for (let i = 0; i < slots.length; i++) {
+      const variation = variations[i % variations.length];
+      updateStmt.run(variation.title, variation.description, topic, slots[i].id);
+    }
+
+    res.json({ success: true, count: variations.length });
+  } catch (err) {
+    console.error("Bulk generation error:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Bulk generation failed" });
+  }
+});
+
+app.post("/api/metadata-slots/reset-used", requireAuth, (req, res) => {
+  try {
+    db.prepare("UPDATE metadata_slots SET is_used = 0 WHERE user_id = ?").run(req.session.user.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to reset slots" });
+  }
+});
 app.post("/api/metadata-slots/generate", requireAuth, async (req, res) => {
   const { slotId, topic } = req.body;
   if (!topic) return res.status(400).json({ error: "Topic is required" });
