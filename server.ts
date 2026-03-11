@@ -170,8 +170,8 @@ db.exec(`
     rtmp_url TEXT,
     stream_key TEXT,
     description TEXT,
-    bitrate INTEGER DEFAULT 3000,
-    resolution TEXT DEFAULT '1280x720',
+    bitrate INTEGER DEFAULT 6000,
+    resolution TEXT DEFAULT '1920x1080',
     status TEXT DEFAULT 'idle',
     last_triggered TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -243,6 +243,7 @@ const migrate = () => {
       if (!columns.includes("profile_picture")) db.prepare("ALTER TABLE users ADD COLUMN profile_picture TEXT").run();
       if (!columns.includes("login_attempts")) db.prepare("ALTER TABLE users ADD COLUMN login_attempts INTEGER DEFAULT 0").run();
       if (!columns.includes("lockout_until")) db.prepare("ALTER TABLE users ADD COLUMN lockout_until DATETIME").run();
+      if (!columns.includes("expires_at")) db.prepare("ALTER TABLE users ADD COLUMN expires_at DATETIME").run();
     }
     
     if (table === "media") {
@@ -301,6 +302,8 @@ const migrate = () => {
       if (!columns.includes("is_used")) db.prepare("ALTER TABLE metadata_slots ADD COLUMN is_used INTEGER DEFAULT 0").run();
       if (!columns.includes("last_used_at")) db.prepare("ALTER TABLE metadata_slots ADD COLUMN last_used_at DATETIME").run();
       if (!columns.includes("last_number")) db.prepare("ALTER TABLE metadata_slots ADD COLUMN last_number INTEGER DEFAULT 0").run();
+      if (!columns.includes("sub_index")) db.prepare("ALTER TABLE metadata_slots ADD COLUMN sub_index INTEGER DEFAULT 0").run();
+      if (!columns.includes("tags")) db.prepare("ALTER TABLE metadata_slots ADD COLUMN tags TEXT").run();
     }
 
     if (table === "logs") {
@@ -459,26 +462,28 @@ const getMetadataForTime = (userId: number, date: Date, timezone: string, markAs
     let slot = db.prepare(`
       SELECT * FROM metadata_slots 
       WHERE user_id = ? AND day_of_week = ? AND slot_index = ? AND is_used = 0
+      ORDER BY id ASC LIMIT 1
     `).get(userId, dayOfWeek, slotIndex) as any;
 
     if (!slot) {
+      // If all used, pick the oldest used one to rotate
       slot = db.prepare(`
         SELECT * FROM metadata_slots 
         WHERE user_id = ? AND day_of_week = ? AND slot_index = ?
+        ORDER BY last_used_at ASC LIMIT 1
       `).get(userId, dayOfWeek, slotIndex) as any;
     }
       
     if (slot && markAsUsed) {
-      // Increment last_number and mark as used
-      const newNumber = (slot.last_number || 0) + 1;
+      const nextNumber = (slot.last_number || 0) + 1;
+      const newTitle = slot.title.includes('#') 
+        ? slot.title.replace(/#\d+$/, `#${nextNumber}`) 
+        : `${slot.title} #${nextNumber}`;
+        
       db.prepare("UPDATE metadata_slots SET is_used = 1, last_used_at = CURRENT_TIMESTAMP, last_number = ? WHERE id = ?")
-        .run(newNumber, slot.id);
+        .run(nextNumber, slot.id);
       
-      // Update the title in the returned object to include the number
-      slot.last_number = newNumber;
-      if (slot.title) {
-        slot.title = `${slot.title} #${newNumber}`;
-      }
+      return { ...slot, title: newTitle };
     }
 
     return slot || null;
@@ -1061,14 +1066,30 @@ async function createYouTubeBroadcast(streamId: number) {
     const tz = timezone ? timezone.value : "UTC";
     const scheduledTime = getISOWithOffset(stream.start_date, stream.start_time, tz);
 
+    let title = stream.name;
+    let description = stream.description || "Live Stream via SaungStream";
+    let tags = stream.youtube_tags;
+    let thumbnailUrl = null;
+
+    if (stream.use_ai_metadata && stream.start_date && stream.start_time) {
+      const date = new Date(`${stream.start_date}T${stream.start_time}:00`);
+      const metadata = getMetadataForTime(stream.user_id, date, tz, true);
+      if (metadata) {
+        title = metadata.title;
+        description = metadata.description;
+        tags = metadata.tags || tags;
+        thumbnailUrl = metadata.thumbnail_url;
+      }
+    }
+
     // 1. Create Broadcast
     const broadcastRes = await youtube.liveBroadcasts.insert({
       part: ["snippet", "status", "contentDetails"],
       requestBody: {
         snippet: {
-          title: stream.name,
+          title: title,
           scheduledStartTime: scheduledTime,
-          description: stream.description || "Live Stream via SaungStream"
+          description: description
         },
         status: {
           privacyStatus: "public",
@@ -1090,16 +1111,16 @@ async function createYouTubeBroadcast(streamId: number) {
       requestBody: {
         id: broadcastId!,
         snippet: {
-          title: stream.name,
-          description: stream.description || "Live Stream via SaungStream",
+          title: title,
+          description: description,
           categoryId: stream.youtube_category || "24",
-          tags: stream.youtube_tags ? stream.youtube_tags.split(",").map((t: string) => t.trim()) : [],
+          tags: tags ? tags.split(",").map((t: string) => t.trim()) : [],
           defaultLanguage: stream.youtube_language || "id",
           defaultAudioLanguage: stream.youtube_language || "id"
         },
         status: {
           selfDeclaredMadeForKids: stream.youtube_made_for_kids === 1,
-          publishAt: stream.youtube_publish_to_subscriptions === 1 ? null : undefined // If not publishing to subs, we might need different logic, but usually for live it's handled by privacy
+          publishAt: stream.youtube_publish_to_subscriptions === 1 ? null : undefined 
         },
         recordingDetails: {
           recordingDate: stream.youtube_recording_date ? new Date(stream.youtube_recording_date).toISOString() : undefined,
@@ -1107,6 +1128,23 @@ async function createYouTubeBroadcast(streamId: number) {
         }
       }
     });
+
+    // Upload thumbnail if available
+    if (thumbnailUrl) {
+      try {
+        const thumbPath = path.join(THUMBNAILS_DIR, thumbnailUrl);
+        if (fs.existsSync(thumbPath)) {
+          await youtube.thumbnails.set({
+            videoId: broadcastId!,
+            media: {
+              body: fs.createReadStream(thumbPath)
+            }
+          });
+        }
+      } catch (thumbErr) {
+        console.error("Failed to upload thumbnail to YouTube:", thumbErr);
+      }
+    }
 
     // Handle playlists
     if (stream.youtube_playlists) {
@@ -1137,7 +1175,7 @@ async function createYouTubeBroadcast(streamId: number) {
     const streamRes = await youtube.liveStreams.insert({
       part: ["snippet", "cdn", "contentDetails"],
       requestBody: {
-        snippet: { title: stream.name },
+        snippet: { title: title },
         cdn: {
           frameRate: "30fps",
           ingestionType: "rtmp",
@@ -1192,7 +1230,8 @@ app.post("/api/login", (req, res) => {
     // Reset attempts
     db.prepare("UPDATE users SET login_attempts = 0, lockout_until = NULL WHERE id = ?").run(user.id);
     req.session.user = { id: user.id, username: user.username, role: user.role };
-    res.json({ success: true, user: req.session.user });
+    const { password: _, ...userWithoutPassword } = user;
+    res.json({ success: true, user: userWithoutPassword });
   } else {
     const attempts = (user.login_attempts || 0) + 1;
     let lockoutUntil = null;
@@ -1212,7 +1251,7 @@ app.post("/api/logout", (req, res) => {
 
 app.get("/api/me", (req, res) => {
   if (req.session.user) {
-    const user = db.prepare("SELECT id, username, role, status, storage_limit, profile_picture FROM users WHERE id = ?").get(req.session.user.id) as any;
+    const user = db.prepare("SELECT id, username, role, status, storage_limit, profile_picture, expires_at, created_at FROM users WHERE id = ?").get(req.session.user.id) as any;
     res.json({ user });
   } else {
     res.json({ user: null });
@@ -1264,108 +1303,6 @@ const storage = multer.diskStorage({
   }
 });
 const upload = multer({ storage });
-
-app.post("/api/media/download", requireAuth, async (req, res) => {
-  const { url } = req.body;
-  if (!url) return res.status(400).json({ error: "URL is required" });
-
-  try {
-    const filename = `download-${Date.now()}.mp4`;
-    const filepath = path.join(UPLOADS_DIR, filename);
-    
-    if (url.includes("mega.nz")) {
-      const file = MegaFile.fromURL(url);
-      await file.loadAttributes();
-      const stream = file.download({});
-      const writer = fs.createWriteStream(filepath);
-      stream.pipe(writer);
-      
-      writer.on("finish", () => {
-        processDownloadedFile(req, res, filepath, filename);
-      });
-      
-      writer.on("error", (err) => {
-        console.error("Mega download error:", err);
-        res.status(500).json({ error: "Failed to download from Mega" });
-      });
-      return;
-    }
-
-    let downloadUrl = url;
-    
-    // Simple transformations for common services
-    if (url.includes("drive.google.com")) {
-      const match = url.match(/\/d\/(.+?)\//) || url.match(/id=(.+?)(&|$)/);
-      if (match) {
-        const fileId = match[1];
-        try {
-          // Try to get confirmation token for large files
-          const confirmRes = await axios.get(`https://drive.google.com/uc?export=download&id=${fileId}`, {
-            validateStatus: () => true
-          });
-          const confirmMatch = confirmRes.data.match(/confirm=([0-9A-Za-z_]+)/);
-          if (confirmMatch) {
-            downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=${confirmMatch[1]}`;
-          } else {
-            downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-          }
-        } catch (e) {
-          downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-        }
-      }
-    } else if (url.includes("dropbox.com")) {
-      downloadUrl = url.replace("dl=0", "dl=1");
-    }
-
-    const response = await axios({
-      method: "get",
-      url: downloadUrl,
-      responseType: "stream",
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
-    });
-
-    const writer = fs.createWriteStream(filepath);
-    response.data.pipe(writer);
-
-    writer.on("finish", () => {
-      processDownloadedFile(req, res, filepath, filename);
-    });
-    
-    writer.on("error", (err) => {
-      res.status(500).json({ error: "Failed to write downloaded file" });
-    });
-  } catch (err: any) {
-    console.error("Download error:", err);
-    res.status(500).json({ error: "Failed to download from URL: " + err.message });
-  }
-});
-
-const processDownloadedFile = (req: any, res: any, filepath: string, filename: string) => {
-  const thumbnailName = `thumb-${Date.now()}.jpg`;
-  ffmpeg(filepath)
-    .screenshots({
-      timestamps: ["2%"],
-      filename: thumbnailName,
-      folder: THUMBNAILS_DIR,
-      size: "320x180",
-    })
-    .on("end", () => {
-      ffmpeg.ffprobe(filepath, (err, metadata) => {
-        const duration = metadata?.format?.duration || 0;
-        const size = fs.statSync(filepath).size;
-        db.prepare("INSERT INTO media (user_id, filename, filepath, duration, thumbnail_path, size, status) VALUES (?, ?, ?, ?, ?, ?, ?)")
-          .run(req.session.user.id, filename, filepath, Math.round(duration), thumbnailName, size, 'ready');
-        logAction(req.session.user.id, req.session.user.username, "Media Downloaded", `Downloaded ${filename} from URL`);
-        res.json({ success: true });
-      });
-    })
-    .on("error", (err) => {
-      console.error("FFmpeg processing error:", err);
-      res.status(500).json({ error: "Failed to process downloaded video" });
-    });
-};
 
 app.post("/api/media/upload", requireAuth, upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -1605,8 +1542,8 @@ app.post("/api/streams", requireAuth, (req, res) => {
       youtube_channel_id || null, 
       rtmp_url, 
       stream_key, 
-      bitrate || 3000, 
-      resolution || '1280x720', 
+      bitrate || 6000, 
+      resolution || '1920x1080', 
       loop ? 1 : 0, 
       duration || -1, 
       start_time, 
@@ -1714,8 +1651,8 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
       youtube_channel_id || null, 
       rtmp_url, 
       stream_key, 
-      bitrate || 3000, 
-      resolution || '1280x720', 
+      bitrate || 6000, 
+      resolution || '1920x1080', 
       loop ? 1 : 0, 
       duration || -1, 
       start_time, 
@@ -1824,33 +1761,69 @@ app.get("/api/logs", requireAuth, (req, res) => {
 
 // User Management
 app.get("/api/users", requireAuth, requireAdmin, (req, res) => {
-  const users = db.prepare("SELECT id, username, role, status, storage_limit, profile_picture, created_at FROM users").all();
+  const users = db.prepare("SELECT id, username, role, status, storage_limit, profile_picture, created_at, expires_at FROM users").all();
   res.json(users);
 });
 
 app.post("/api/users", requireAuth, requireAdmin, (req, res) => {
-  const { username, password, role, status, storage_limit } = req.body;
-  const hashedPassword = bcrypt.hashSync(password, 10);
+  const { role, status, storage_limit, expires_at } = req.body;
+  
+  // Find next username
+  const users = db.prepare("SELECT username FROM users WHERE username LIKE 'saungstream%'").all() as any[];
+  let nextUsername = "saungstream";
+  if (users.length > 0) {
+    const indices = users.map(u => {
+      if (u.username === "saungstream") return 0;
+      const match = u.username.match(/saungstream-(\d+)/);
+      return match ? parseInt(match[1]) : -1;
+    }).filter(i => i >= 0);
+    
+    if (indices.length > 0) {
+      const maxIndex = Math.max(...indices);
+      nextUsername = `saungstream-${maxIndex + 1}`;
+    } else {
+      nextUsername = "saungstream-1";
+    }
+  }
+
+  const defaultPassword = "123";
+  const hashedPassword = bcrypt.hashSync(defaultPassword, 10);
+  
   try {
-    const result = db.prepare("INSERT INTO users (username, password, role, status, storage_limit) VALUES (?, ?, ?, ?, ?)")
-      .run(username, hashedPassword, role || 'member', status || 'active', storage_limit || 10);
-    res.json({ id: result.lastInsertRowid });
+    const result = db.prepare("INSERT INTO users (username, password, role, status, storage_limit, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(nextUsername, hashedPassword, role || 'member', status || 'active', storage_limit || 10, expires_at || null);
+    res.json({ id: result.lastInsertRowid, username: nextUsername, password: defaultPassword });
   } catch (err) {
-    res.status(400).json({ error: "Username already exists" });
+    res.status(400).json({ error: "Failed to create user" });
   }
 });
 
 app.put("/api/users/:id", requireAuth, requireAdmin, (req, res) => {
-  const { username, role, status, storage_limit, password } = req.body;
+  const { username, role, status, storage_limit, password, expires_at } = req.body;
   if (password) {
     const hashedPassword = bcrypt.hashSync(password, 10);
-    db.prepare("UPDATE users SET username = ?, role = ?, status = ?, storage_limit = ?, password = ? WHERE id = ?")
-      .run(username, role, status, storage_limit, hashedPassword, req.params.id);
+    db.prepare("UPDATE users SET username = ?, role = ?, status = ?, storage_limit = ?, password = ?, expires_at = ? WHERE id = ?")
+      .run(username, role, status, storage_limit, hashedPassword, expires_at || null, req.params.id);
   } else {
-    db.prepare("UPDATE users SET username = ?, role = ?, status = ?, storage_limit = ? WHERE id = ?")
-      .run(username, role, status, storage_limit, req.params.id);
+    db.prepare("UPDATE users SET username = ?, role = ?, status = ?, storage_limit = ?, expires_at = ? WHERE id = ?")
+      .run(username, role, status, storage_limit, expires_at || null, req.params.id);
   }
   res.json({ success: true });
+});
+
+app.post("/api/users/:id/extend", requireAuth, requireAdmin, (req, res) => {
+  const { months } = req.body;
+  const user = db.prepare("SELECT expires_at FROM users WHERE id = ?").get(req.params.id) as any;
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  let currentExpiry = user.expires_at ? new Date(user.expires_at) : new Date();
+  if (currentExpiry < new Date()) currentExpiry = new Date();
+
+  const newExpiry = new Date(currentExpiry);
+  newExpiry.setMonth(newExpiry.getMonth() + Number(months));
+  
+  db.prepare("UPDATE users SET expires_at = ? WHERE id = ?").run(newExpiry.toISOString(), req.params.id);
+  res.json({ success: true, newExpiry: newExpiry.toISOString() });
 });
 
 app.delete("/api/users/:id", requireAuth, requireAdmin, (req, res) => {
@@ -2183,9 +2156,10 @@ app.post("/api/metadata-slots/generate-day", requireAuth, async (req, res) => {
     // Generate 10 variations in one go
     const textResponse = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `Generate 10 unique YouTube stream titles and detailed descriptions for a live stream about: ${topic}. 
+      contents: `Generate 10 unique YouTube stream titles, detailed descriptions, and relevant tags for a live stream about: ${topic}. 
       The variations should be suitable for different times of the day (morning, afternoon, evening).
-      Return the result in JSON format as an array of 10 objects, each with keys "title" and "description".`,
+      Return the result in JSON format as an array of 10 objects, each with keys "title", "description", and "tags".
+      The tags should be a comma-separated string of highly relevant keywords for SEO, with a maximum length of 500 characters including commas.`,
       config: { responseMimeType: "application/json" }
     });
 
@@ -2196,11 +2170,11 @@ app.post("/api/metadata-slots/generate-day", requireAuth, async (req, res) => {
     }
 
     // Update each slot
-    const updateStmt = db.prepare("UPDATE metadata_slots SET title = ?, description = ?, topic = ?, is_used = 0 WHERE id = ?");
+    const updateStmt = db.prepare("UPDATE metadata_slots SET title = ?, description = ?, tags = ?, topic = ?, is_used = 0 WHERE id = ?");
     
     for (let i = 0; i < slots.length; i++) {
       const variation = variations[i % variations.length];
-      updateStmt.run(variation.title, variation.description, topic, slots[i].id);
+      updateStmt.run(variation.title, variation.description, variation.tags || "", topic, slots[i].id);
     }
 
     res.json({ success: true, count: variations.length });
@@ -2236,9 +2210,10 @@ app.post("/api/metadata-slots/generate", requireAuth, async (req, res) => {
     // Generate Text
     const textResponse = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `Generate a catchy YouTube stream title and a detailed description for a live stream about: ${topic}. 
-      Return the result in JSON format with keys "title" and "description". 
-      The description should be engaging and include relevant keywords.`,
+      contents: `Generate a catchy YouTube stream title, a detailed description, and relevant tags for a live stream about: ${topic}. 
+      Return the result in JSON format with keys "title", "description", and "tags". 
+      The description should be engaging and include relevant keywords.
+      The tags should be a comma-separated string of highly relevant keywords for SEO, with a maximum length of 500 characters including commas.`,
       config: { responseMimeType: "application/json" }
     });
 
@@ -2272,11 +2247,11 @@ app.post("/api/metadata-slots/generate", requireAuth, async (req, res) => {
     }
 
     if (metadata.title) {
-      db.prepare("UPDATE metadata_slots SET title = ?, description = ?, topic = ?, thumbnail_url = ? WHERE id = ? AND user_id = ?")
-        .run(metadata.title, metadata.description, topic, thumbnailUrl, slotId, req.session.user.id);
+      db.prepare("UPDATE metadata_slots SET title = ?, description = ?, tags = ?, topic = ?, thumbnail_url = ? WHERE id = ? AND user_id = ?")
+        .run(metadata.title, metadata.description, metadata.tags || "", topic, thumbnailUrl, slotId, req.session.user.id);
     }
 
-    res.json({ success: true, title: metadata.title, description: metadata.description, thumbnail_url: thumbnailUrl });
+    res.json({ success: true, title: metadata.title, description: metadata.description, tags: metadata.tags, thumbnail_url: thumbnailUrl });
   } catch (err: any) {
     console.error("AI Generation failed:", err);
     res.status(500).json({ error: "AI Generation failed: " + err.message });
