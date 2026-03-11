@@ -70,6 +70,10 @@ import { motion, AnimatePresence } from "motion/react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+const UPLOAD_API_URL = window.location.hostname === 'saungstream.my.id' 
+  ? 'https://upload.saungstream.my.id/api/media/upload' 
+  : '/api/media/upload';
+
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -1195,7 +1199,8 @@ const MediaLibrary = () => {
     formData.append("file", file);
 
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/media/upload", true);
+    xhr.open("POST", UPLOAD_API_URL, true);
+    xhr.withCredentials = true;
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
