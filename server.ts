@@ -1,4 +1,5 @@
 import express from "express";
+import "dotenv/config";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
@@ -40,6 +41,17 @@ console.log(`Initializing directories in: ${process.cwd()}`);
     fs.mkdirSync(dir, { recursive: true });
     console.log(`Created directory: ${dir}`);
   }
+  // Ensure directory is writable
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+  } catch (e) {
+    console.log(`Directory ${dir} is not writable, attempting to fix permissions...`);
+    try {
+      fs.chmodSync(dir, 0o777);
+    } catch (chmodError) {
+      console.error(`Failed to fix permissions for ${dir}:`, chmodError);
+    }
+  }
 });
 
 // Move existing DB files to data/ if they exist in root to avoid git update locks
@@ -47,12 +59,33 @@ const dbFiles = ["saungstream.db", "sessions.db", "saungstream.db-shm", "saungst
 dbFiles.forEach(file => {
   const oldPath = path.join(process.cwd(), file);
   const newPath = path.join(DATA_DIR, file);
-  if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) {
+  if (fs.existsSync(oldPath)) {
+    if (!fs.existsSync(newPath)) {
+      try {
+        fs.renameSync(oldPath, newPath);
+        console.log(`Successfully moved ${file} to data/ folder`);
+      } catch (e) {
+        console.error(`Failed to move ${file} to data/ folder:`, e);
+      }
+    } else {
+      // If both exist, delete the old one to avoid confusion
+      try {
+        fs.unlinkSync(oldPath);
+      } catch (e) {}
+    }
+  }
+  
+  // Ensure database files are writable if they exist in data/
+  if (fs.existsSync(newPath)) {
     try {
-      fs.renameSync(oldPath, newPath);
-      console.log(`Successfully moved ${file} to data/ folder`);
+      fs.accessSync(newPath, fs.constants.W_OK);
     } catch (e) {
-      console.error(`Failed to move ${file} to data/ folder:`, e);
+      console.log(`File ${newPath} is not writable, attempting to fix permissions...`);
+      try {
+        fs.chmodSync(newPath, 0o666);
+      } catch (chmodError) {
+        console.error(`Failed to fix permissions for ${newPath}:`, chmodError);
+      }
     }
   }
 });
@@ -162,13 +195,13 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
+    user_id INTEGER NULL,
     username TEXT,
     action TEXT,
     message TEXT,
     type TEXT DEFAULT 'info', -- info, error
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
   );
 
   CREATE TABLE IF NOT EXISTS settings (
@@ -275,7 +308,7 @@ const checkUpdateStatus = async () => {
         const { stdout: commitMsg } = await execAsync("git log -1 --pretty=%B");
         const message = commitMsg.trim();
         
-        logAction(0, username, "System Update Success", `Update to version ${currentHash} was successful. Latest commit: ${message}`);
+        logAction(null as any, username, "System Update Success", `Update to version ${currentHash} was successful. Latest commit: ${message}`);
         
         // Set a flag for the frontend to show an announcement
         db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_update_success', ?)").run(JSON.stringify({
@@ -810,13 +843,20 @@ const getOAuth2Client = (req: any) => {
 
   const redirectUri = `${protocol}://${host}/api/auth/youtube/callback`;
   
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
   console.log(`[YouTube OAuth Debug] Protocol: ${protocol}, Host: ${host}`);
   console.log(`[YouTube OAuth Debug] Redirect URI: ${redirectUri}`);
-  console.log(`[YouTube OAuth Debug] Client ID starts with: ${process.env.GOOGLE_CLIENT_ID?.substring(0, 10)}...`);
+  console.log(`[YouTube OAuth Debug] Client ID starts with: ${clientId?.substring(0, 10)}...`);
   
+  if (!clientId || !clientSecret) {
+    console.error("[YouTube OAuth Error] GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET is missing in environment variables!");
+  }
+
   return new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
+    clientId,
+    clientSecret,
     redirectUri
   );
 };
