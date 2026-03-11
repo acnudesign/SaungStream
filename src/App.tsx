@@ -81,7 +81,21 @@ const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
   const [theme] = useState<'dark'>('dark');
 
   useEffect(() => {
+    // Force dark mode on the root element
     document.documentElement.classList.add('dark');
+    document.documentElement.classList.remove('light');
+    document.documentElement.style.colorScheme = 'dark';
+    
+    // Optional: Watch for changes and force it back if something else changes it
+    const observer = new MutationObserver(() => {
+      if (!document.documentElement.classList.contains('dark')) {
+        document.documentElement.classList.add('dark');
+      }
+    });
+    
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    
+    return () => observer.disconnect();
   }, []);
 
   const toggleTheme = () => {};
@@ -1535,7 +1549,29 @@ const Streams = () => {
     repeat_days: "",
     repeat_date: 1,
     schedule_enabled: false,
-    use_ai_metadata: true
+    use_ai_metadata: true,
+    youtube_playlists: [],
+    youtube_made_for_kids: false,
+    youtube_age_restriction: false,
+    youtube_paid_promotion: false,
+    youtube_altered_content: false,
+    youtube_automatic_chapters: true,
+    youtube_featured_places: true,
+    youtube_automatic_concepts: true,
+    youtube_tags: "",
+    youtube_language: "id",
+    youtube_caption_certification: "",
+    youtube_title_description_language: "id",
+    youtube_recording_date: "",
+    youtube_recording_location: "",
+    youtube_license: "youtube",
+    youtube_allow_embedding: true,
+    youtube_publish_to_subscriptions: true,
+    youtube_shorts_remixing: "allow_video_audio",
+    youtube_category: "24",
+    youtube_comments_mode: "on",
+    youtube_who_can_comment: "anyone",
+    youtube_sort_by: "top"
   });
 
   const fetchStreams = async () => {
@@ -1561,7 +1597,8 @@ const Streams = () => {
         setFormData({
           ...formData,
           name: data.title || formData.name,
-          description: data.description || formData.description
+          description: data.description || formData.description,
+          youtube_tags: data.topic || formData.youtube_tags
         });
       } else {
         alert("No AI metadata found for this time slot.");
@@ -1586,7 +1623,29 @@ const Streams = () => {
       duration: Number(formData.duration) || -1,
       repeat_date: Number(formData.repeat_date) || 1,
       schedule_enabled: formData.schedule_enabled ? 1 : 0,
-      use_ai_metadata: formData.use_ai_metadata ? 1 : 0
+      use_ai_metadata: formData.use_ai_metadata ? 1 : 0,
+      youtube_playlists: formData.youtube_playlists,
+      youtube_made_for_kids: formData.youtube_made_for_kids ? 1 : 0,
+      youtube_age_restriction: formData.youtube_age_restriction ? 1 : 0,
+      youtube_paid_promotion: formData.youtube_paid_promotion ? 1 : 0,
+      youtube_altered_content: formData.youtube_altered_content ? 1 : 0,
+      youtube_automatic_chapters: formData.youtube_automatic_chapters ? 1 : 0,
+      youtube_featured_places: formData.youtube_featured_places ? 1 : 0,
+      youtube_automatic_concepts: formData.youtube_automatic_concepts ? 1 : 0,
+      youtube_tags: formData.youtube_tags,
+      youtube_language: formData.youtube_language,
+      youtube_caption_certification: formData.youtube_caption_certification,
+      youtube_title_description_language: formData.youtube_title_description_language,
+      youtube_recording_date: formData.youtube_recording_date,
+      youtube_recording_location: formData.youtube_recording_location,
+      youtube_license: formData.youtube_license,
+      youtube_allow_embedding: formData.youtube_allow_embedding ? 1 : 0,
+      youtube_publish_to_subscriptions: formData.youtube_publish_to_subscriptions ? 1 : 0,
+      youtube_shorts_remixing: formData.youtube_shorts_remixing,
+      youtube_category: formData.youtube_category,
+      youtube_comments_mode: formData.youtube_comments_mode,
+      youtube_who_can_comment: formData.youtube_who_can_comment,
+      youtube_sort_by: formData.youtube_sort_by
     };
     
     try {
@@ -1645,7 +1704,29 @@ const Streams = () => {
       repeat_days: stream.repeat_days || "",
       repeat_date: stream.repeat_date || 1,
       schedule_enabled: stream.schedule_enabled === 1,
-      use_ai_metadata: stream.use_ai_metadata === 1
+      use_ai_metadata: stream.use_ai_metadata === 1,
+      youtube_playlists: stream.youtube_playlists ? JSON.parse(stream.youtube_playlists) : [],
+      youtube_made_for_kids: stream.youtube_made_for_kids === 1,
+      youtube_age_restriction: stream.youtube_age_restriction === 1,
+      youtube_paid_promotion: stream.youtube_paid_promotion === 1,
+      youtube_altered_content: stream.youtube_altered_content === 1,
+      youtube_automatic_chapters: stream.youtube_automatic_chapters === 1,
+      youtube_featured_places: stream.youtube_featured_places === 1,
+      youtube_automatic_concepts: stream.youtube_automatic_concepts === 1,
+      youtube_tags: stream.youtube_tags || "",
+      youtube_language: stream.youtube_language || "id",
+      youtube_caption_certification: stream.youtube_caption_certification || "",
+      youtube_title_description_language: stream.youtube_title_description_language || "id",
+      youtube_recording_date: stream.youtube_recording_date || "",
+      youtube_recording_location: stream.youtube_recording_location || "",
+      youtube_license: stream.youtube_license || "youtube",
+      youtube_allow_embedding: stream.youtube_allow_embedding === 1,
+      youtube_publish_to_subscriptions: stream.youtube_publish_to_subscriptions === 1,
+      youtube_shorts_remixing: stream.youtube_shorts_remixing || "allow_video_audio",
+      youtube_category: stream.youtube_category || "24",
+      youtube_comments_mode: stream.youtube_comments_mode || "on",
+      youtube_who_can_comment: stream.youtube_who_can_comment || "anyone",
+      youtube_sort_by: stream.youtube_sort_by || "top"
     });
     setIsCreating(true);
   };
@@ -1675,13 +1756,54 @@ const Streams = () => {
           <p className="text-slate-500 dark:text-slate-400">Configure and monitor your broadcasts</p>
         </div>
         <button 
-          onClick={() => { setIsCreating(true); setEditingStream(null); setFormData({
-            name: "", description: "", source_type: "playlist", playlist_id: "", video_id: "", platform: "youtube",
-            youtube_channel_id: "",
-            rtmp_url: "rtmps://a.rtmp.youtube.com/live2", stream_key: "", bitrate: 3000, resolution: "1280x720",
-            loop: true, duration: -1, start_time: "12:00", start_date: new Date().toISOString().slice(0, 10),
-            repeat_type: "none", repeat_days: "", repeat_date: 1, schedule_enabled: true, use_ai_metadata: true
-          }); }}
+          onClick={() => { 
+            setIsCreating(true); 
+            setEditingStream(null); 
+            setFormData({
+              name: "",
+              description: "",
+              source_type: "playlist",
+              playlist_id: "",
+              video_id: "",
+              platform: "youtube",
+              youtube_channel_id: "",
+              rtmp_url: "rtmps://a.rtmp.youtube.com/live2",
+              stream_key: "",
+              bitrate: 3000,
+              resolution: "1280x720",
+              loop: true,
+              duration: -1,
+              start_time: "12:00",
+              start_date: new Date().toISOString().slice(0, 10),
+              repeat_type: "none",
+              repeat_days: "",
+              repeat_date: 1,
+              schedule_enabled: false,
+              use_ai_metadata: true,
+              youtube_playlists: [],
+              youtube_made_for_kids: false,
+              youtube_age_restriction: false,
+              youtube_paid_promotion: false,
+              youtube_altered_content: false,
+              youtube_automatic_chapters: true,
+              youtube_featured_places: true,
+              youtube_automatic_concepts: true,
+              youtube_tags: "",
+              youtube_language: "id",
+              youtube_caption_certification: "",
+              youtube_title_description_language: "id",
+              youtube_recording_date: "",
+              youtube_recording_location: "",
+              youtube_license: "youtube",
+              youtube_allow_embedding: true,
+              youtube_publish_to_subscriptions: true,
+              youtube_shorts_remixing: "allow_video_audio",
+              youtube_category: "24",
+              youtube_comments_mode: "on",
+              youtube_who_can_comment: "anyone",
+              youtube_sort_by: "top"
+            }); 
+          }}
           className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all"
         >
           <Plus size={20} />
@@ -1823,6 +1945,144 @@ const Streams = () => {
                 />
               </div>
             </div>
+
+            {formData.platform === 'youtube' && (
+              <div className="pt-6 border-t border-slate-100 dark:border-slate-800 space-y-6">
+                <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  <Youtube className="text-red-600" size={20} />
+                  YouTube Publishing Settings
+                </h3>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Category</label>
+                    <select 
+                      value={formData.youtube_category}
+                      onChange={e => setFormData({...formData, youtube_category: e.target.value})}
+                      className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="1">Film & Animation</option>
+                      <option value="2">Autos & Vehicles</option>
+                      <option value="10">Music</option>
+                      <option value="15">Pets & Animals</option>
+                      <option value="17">Sports</option>
+                      <option value="19">Travel & Events</option>
+                      <option value="20">Gaming</option>
+                      <option value="22">People & Blogs</option>
+                      <option value="23">Comedy</option>
+                      <option value="24">Entertainment</option>
+                      <option value="25">News & Politics</option>
+                      <option value="26">Howto & Style</option>
+                      <option value="27">Education</option>
+                      <option value="28">Science & Technology</option>
+                    </select>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Tags (comma separated)</label>
+                    <input 
+                      type="text" 
+                      value={formData.youtube_tags}
+                      onChange={e => setFormData({...formData, youtube_tags: e.target.value})}
+                      className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="live, stream, saungstream"
+                    />
+                  </div>
+
+                  <div className="space-y-4">
+                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300 block">Audience</label>
+                    <div className="space-y-3">
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <div className="relative">
+                          <input 
+                            type="checkbox" 
+                            checked={formData.youtube_made_for_kids}
+                            onChange={e => setFormData({...formData, youtube_made_for_kids: e.target.checked})}
+                            className="sr-only peer"
+                          />
+                          <div className="w-10 h-6 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:bg-red-600 transition-all after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+                        </div>
+                        <span className="text-sm text-slate-700 dark:text-slate-300">Made for Kids</span>
+                      </label>
+                      
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <div className="relative">
+                          <input 
+                            type="checkbox" 
+                            checked={formData.youtube_age_restriction}
+                            onChange={e => setFormData({...formData, youtube_age_restriction: e.target.checked})}
+                            className="sr-only peer"
+                          />
+                          <div className="w-10 h-6 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:bg-red-600 transition-all after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+                        </div>
+                        <span className="text-sm text-slate-700 dark:text-slate-300">Age Restriction (18+)</span>
+                      </label>
+
+                      <div className="pt-2 space-y-2">
+                        <label className="text-sm font-bold text-slate-700 dark:text-slate-300 block">Altered content</label>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
+                          Do any of the following describe your content?
+                          <br />• Makes a real person appear to say or do something they didn’t say or do
+                          <br />• Alters footage of a real event or place
+                          <br />• Generates a realistic-looking scene that didn’t actually occur
+                        </p>
+                        <div className="flex gap-4 mt-2">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input 
+                              type="radio" 
+                              checked={formData.youtube_altered_content} 
+                              onChange={() => setFormData({...formData, youtube_altered_content: true})} 
+                              className="accent-indigo-600" 
+                            />
+                            <span className="text-sm text-slate-600 dark:text-slate-400">Yes</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input 
+                              type="radio" 
+                              checked={!formData.youtube_altered_content} 
+                              onChange={() => setFormData({...formData, youtube_altered_content: false})} 
+                              className="accent-indigo-600" 
+                            />
+                            <span className="text-sm text-slate-600 dark:text-slate-400">No</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300 block">Features</label>
+                    <div className="space-y-3">
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <div className="relative">
+                          <input 
+                            type="checkbox" 
+                            checked={formData.youtube_paid_promotion}
+                            onChange={e => setFormData({...formData, youtube_paid_promotion: e.target.checked})}
+                            className="sr-only peer"
+                          />
+                          <div className="w-10 h-6 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:bg-indigo-600 transition-all after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+                        </div>
+                        <span className="text-sm text-slate-700 dark:text-slate-300">Paid Promotion</span>
+                      </label>
+                      
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <div className="relative">
+                          <input 
+                            type="checkbox" 
+                            checked={formData.youtube_allow_embedding}
+                            onChange={e => setFormData({...formData, youtube_allow_embedding: e.target.checked})}
+                            className="sr-only peer"
+                          />
+                          <div className="w-10 h-6 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:bg-indigo-600 transition-all after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-4"></div>
+                        </div>
+                        <span className="text-sm text-slate-700 dark:text-slate-300">Allow Embedding</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
               <div className="pt-6 border-t border-slate-100 dark:border-slate-800 space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -3219,6 +3479,16 @@ const AIMetadataPage = () => {
                       onChange={e => setEditingSlot({ ...editingSlot, description: e.target.value })}
                       className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Last Number Used</label>
+                    <input
+                      type="number"
+                      value={editingSlot.last_number || 0}
+                      onChange={e => setEditingSlot({ ...editingSlot, last_number: parseInt(e.target.value) })}
+                      className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <p className="text-[10px] text-slate-500 italic">This number will be incremented and appended to the title when used (e.g. Title #1).</p>
                   </div>
                 </div>
                 <div className="p-6 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-3">
