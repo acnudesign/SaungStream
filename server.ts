@@ -793,6 +793,11 @@ const getOAuth2Client = (req: any) => {
   let protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
   let host = req.get('x-forwarded-host') || req.get('host');
   
+  // Handle x-forwarded-host if it's a comma-separated list
+  if (host && typeof host === 'string' && host.includes(',')) {
+    host = host.split(',')[0].trim();
+  }
+
   // Force https for non-localhost environments (Cloud Run/Production)
   if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
     protocol = 'https';
@@ -804,7 +809,10 @@ const getOAuth2Client = (req: any) => {
   }
 
   const redirectUri = `${protocol}://${host}/api/auth/youtube/callback`;
-  console.log(`YouTube OAuth Redirect URI: ${redirectUri}`);
+  
+  console.log(`[YouTube OAuth Debug] Protocol: ${protocol}, Host: ${host}`);
+  console.log(`[YouTube OAuth Debug] Redirect URI: ${redirectUri}`);
+  console.log(`[YouTube OAuth Debug] Client ID starts with: ${process.env.GOOGLE_CLIENT_ID?.substring(0, 10)}...`);
   
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
