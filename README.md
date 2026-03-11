@@ -61,6 +61,7 @@ Clone the repository and install dependencies.
 git clone https://github.com/acnudesign/SaungStream
 cd SaungStream
 npm install
+npm run build
 ```
 
 ### 7. Configure Environment Variables
