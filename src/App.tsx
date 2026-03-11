@@ -1,5 +1,6 @@
 import React, { useState, useEffect, createContext, useContext, useRef } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate } from "react-router-dom";
+import { GoogleGenAI, Type } from "@google/genai";
 import { 
   LayoutDashboard, 
   Film, 
@@ -43,7 +44,8 @@ import {
   BookOpen,
   Maximize2,
   ExternalLink,
-  Youtube
+  Youtube,
+  Wand2
 } from "lucide-react";
 import { 
   format, 
@@ -254,6 +256,54 @@ const SidebarItem = ({ to, icon: Icon, label, active, onClick }: { to: string, i
   </Link>
 );
 
+const AccountExpiryBar = ({ user }: { user: any }) => {
+  if (!user || user.role === 'admin' || !user.expires_at) return null;
+
+  const now = new Date();
+  const expiry = new Date(user.expires_at);
+  const created = user.created_at ? new Date(user.created_at) : new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  
+  const totalDuration = expiry.getTime() - created.getTime();
+  const remainingDuration = expiry.getTime() - now.getTime();
+  
+  if (remainingDuration <= 0) return (
+    <div className="flex items-center gap-2 px-3 py-1 bg-red-500/10 text-red-500 rounded-lg border border-red-500/20">
+      <AlertCircle size={14} />
+      <span className="text-[10px] font-bold uppercase">Expired</span>
+    </div>
+  );
+
+  let percentage = (remainingDuration / totalDuration) * 100;
+  percentage = Math.max(0, Math.min(100, percentage));
+
+  // If expiry is more than 30 days away, we might want to cap the "total duration" 
+  // to make the bar more meaningful as it gets closer.
+  // But using created_at is also fine.
+  
+  const daysRemaining = Math.ceil(remainingDuration / (1000 * 60 * 60 * 24));
+  
+  let barColor = "bg-emerald-500";
+  if (daysRemaining <= 3) barColor = "bg-red-500";
+  else if (daysRemaining <= 7) barColor = "bg-amber-500";
+  else if (daysRemaining <= 14) barColor = "bg-yellow-500";
+
+  return (
+    <div className="hidden sm:flex flex-col gap-1 w-24 sm:w-32" title={`${daysRemaining} days remaining until ${format(expiry, 'PPP')}`}>
+      <div className="flex justify-between items-center text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-tighter">
+        <span>Account Expiry</span>
+        <span>{daysRemaining}d</span>
+      </div>
+      <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+        <motion.div 
+          initial={{ width: 0 }}
+          animate={{ width: `${percentage}%` }}
+          className={cn("h-full rounded-full transition-colors duration-500", barColor)}
+        />
+      </div>
+    </div>
+  );
+};
+
 const Layout = ({ children }: { children: React.ReactNode }) => {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useContext(ThemeContext)!;
@@ -264,6 +314,9 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{latestVersion: string, changelog: string[]} | null>(null);
+
+  const isExpired = user && user.role !== 'admin' && user.expires_at && new Date(user.expires_at) < new Date();
+  const daysRemaining = user && user.expires_at ? Math.ceil((new Date(user.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)) : null;
 
   const fetchTime = async () => {
     try {
@@ -325,7 +378,6 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     { to: "/playlists", icon: ListMusic, label: "Playlists" },
     { to: "/streams", icon: Radio, label: "Streams" },
     { to: "/youtube-channels", icon: Youtube, label: "YouTube Channels" },
-    { to: "/ai-metadata", icon: Sparkles, label: "AI Add-ons" },
     { to: "/guide", icon: BookOpen, label: "Guide" },
     { to: "/settings", icon: Settings, label: "Settings" },
   ];
@@ -336,6 +388,41 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
 
   return (
     <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors duration-200">
+      <AnimatePresence>
+        {isExpired && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-slate-900 flex items-center justify-center p-6 text-center"
+          >
+            <div className="max-w-md w-full bg-white dark:bg-slate-800 p-10 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700">
+              <div className="w-20 h-20 bg-red-100 dark:bg-red-900/20 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                <AlertCircle size={48} />
+              </div>
+              <h2 className="text-2xl font-black text-slate-800 dark:text-white mb-4 uppercase tracking-tight">Akun Kadaluarsa</h2>
+              <p className="text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
+                Masa aktif akun Anda telah habis (0 hari). Silakan hubungi admin untuk memperpanjang masa aktif akun Anda agar dapat kembali menggunakan layanan SaungStream.
+              </p>
+              <div className="space-y-4">
+                <button 
+                  onClick={() => window.open('https://wa.me/your_admin_number', '_blank')}
+                  className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 dark:shadow-none flex items-center justify-center gap-3"
+                >
+                  Hubungi Admin (WhatsApp)
+                </button>
+                <button 
+                  onClick={logout}
+                  className="w-full py-4 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-600 transition-all"
+                >
+                  Keluar Akun
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Sidebar - Desktop */}
       <aside className="hidden lg:flex flex-col w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 sticky top-0 h-screen">
         <div className="p-8">
@@ -377,6 +464,37 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
               <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">{user.role}</p>
             </div>
           </div>
+
+          {user.role !== 'admin' && user.expires_at && (
+            <div className="mb-6 px-1">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Masa Aktif</span>
+                <span className={cn(
+                  "text-[10px] font-black uppercase tracking-widest",
+                  daysRemaining !== null && daysRemaining <= 3 ? "text-red-500" : "text-indigo-500"
+                )}>
+                  {daysRemaining !== null ? (daysRemaining > 0 ? `${daysRemaining} Hari` : "Habis") : "Selamanya"}
+                </span>
+              </div>
+              <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden mb-3">
+                <motion.div 
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.max(0, Math.min(100, (daysRemaining || 0) / 30 * 100))}%` }}
+                  className={cn(
+                    "h-full rounded-full",
+                    daysRemaining !== null && daysRemaining <= 3 ? "bg-red-500" : "bg-indigo-500"
+                  )}
+                />
+              </div>
+              <button 
+                onClick={() => window.open('https://wa.me/your_admin_number', '_blank')}
+                className="w-full py-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all"
+              >
+                Perpanjang Akun
+              </button>
+            </div>
+          )}
+
           <div className="flex flex-col gap-2 mb-6">
             <Link to="/terms" className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors">Terms of Service</Link>
             <Link to="/privacy" className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors">Privacy Policy</Link>
@@ -409,6 +527,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-4">
+            <AccountExpiryBar user={user} />
             <button 
               onClick={() => setShowUpdateModal(true)}
               className={cn(
@@ -583,6 +702,35 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
               </div>
 
               <div className="mt-auto p-8 border-t border-slate-100 dark:border-slate-800">
+                {user.role !== 'admin' && user.expires_at && (
+                  <div className="mb-6 px-1">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Masa Aktif</span>
+                      <span className={cn(
+                        "text-[10px] font-black uppercase tracking-widest",
+                        daysRemaining !== null && daysRemaining <= 3 ? "text-red-500" : "text-indigo-500"
+                      )}>
+                        {daysRemaining !== null ? (daysRemaining > 0 ? `${daysRemaining} Hari` : "Habis") : "N/A"}
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden mb-3">
+                      <motion.div 
+                        initial={{ width: 0 }}
+                        animate={{ width: `${Math.max(0, Math.min(100, (daysRemaining || 0) / 30 * 100))}%` }}
+                        className={cn(
+                          "h-full rounded-full",
+                          daysRemaining !== null && daysRemaining <= 3 ? "bg-red-500" : "bg-indigo-500"
+                        )}
+                      />
+                    </div>
+                    <button 
+                      onClick={() => window.open('https://wa.me/your_admin_number', '_blank')}
+                      className="w-full py-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all"
+                    >
+                      Perpanjang Akun
+                    </button>
+                  </div>
+                )}
                 <button 
                   onClick={logout}
                   className="flex items-center gap-3 w-full p-3 text-slate-500 dark:text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all font-bold text-sm"
@@ -1020,11 +1168,8 @@ const Dashboard = () => {
 const MediaLibrary = () => {
   const [media, setMedia] = useState([]);
   const [uploading, setUploading] = useState(false);
-  const [downloadUrl, setDownloadUrl] = useState("");
-  const [isDownloading, setIsDownloading] = useState(false);
   const [previewMedia, setPreviewMedia] = useState<any>(null);
   const [storage, setStorage] = useState<any>({ used: 0, limit: 10 * 1024 * 1024 * 1024, percentage: 0 });
-
   const [uploadProgress, setUploadProgress] = useState(0);
 
   const fetchMedia = async () => {
@@ -1083,29 +1228,6 @@ const MediaLibrary = () => {
     xhr.send(formData);
   };
 
-  const handleDownload = async () => {
-    if (!downloadUrl) return;
-    setIsDownloading(true);
-    try {
-      const res = await fetch("/api/media/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: downloadUrl })
-      });
-      if (res.ok) {
-        setDownloadUrl("");
-        fetchMedia();
-      } else {
-        const data = await res.json();
-        alert(data.error);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsDownloading(false);
-    }
-  };
-
   const deleteMedia = async (id: number) => {
     if (!confirm("Are you sure you want to delete this media?")) return;
     await fetch(`/api/media/${id}`, { method: "DELETE" });
@@ -1141,22 +1263,6 @@ const MediaLibrary = () => {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
-            <input 
-              type="text" 
-              placeholder="Paste video URL (Drive, Dropbox, Mega...)" 
-              value={downloadUrl}
-              onChange={e => setDownloadUrl(e.target.value)}
-              className="px-4 py-2 outline-none text-sm w-48 md:w-64 bg-transparent dark:text-white"
-            />
-            <button 
-              onClick={handleDownload}
-              disabled={isDownloading || !downloadUrl}
-              className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
-            >
-              {isDownloading ? "..." : <Plus size={18} />}
-            </button>
-          </div>
           <label className={cn(
             "flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all cursor-pointer",
             uploading && "opacity-50 cursor-not-allowed"
@@ -1168,27 +1274,48 @@ const MediaLibrary = () => {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+      <AnimatePresence>
         {uploading && (
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden group">
-            <div className="aspect-video bg-slate-100 dark:bg-slate-800 relative overflow-hidden flex items-center justify-center">
-              <div className="absolute inset-0 bg-indigo-600/20 backdrop-blur-sm flex flex-col items-center justify-center p-4">
-                <div className="w-full bg-slate-200 dark:bg-slate-700 h-2 rounded-full overflow-hidden mb-2">
-                  <div 
-                    className="bg-indigo-600 h-full transition-all duration-300" 
-                    style={{ width: `${uploadProgress}%` }}
-                  />
-                </div>
-                <span className="text-indigo-600 dark:text-indigo-400 font-black text-xl">{uploadProgress}%</span>
-                <span className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-bold uppercase tracking-widest">Uploading...</span>
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-6 text-center"
+          >
+            <div className="max-w-2xl w-full bg-white dark:bg-slate-800 p-10 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700">
+              <div className="w-20 h-20 bg-indigo-100 dark:bg-indigo-900/20 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                <RefreshCw size={48} className="animate-spin" />
+              </div>
+              
+              <div className="mb-8">
+                <p className="text-2xl font-arabic mb-4 text-slate-800 dark:text-white leading-loose" dir="rtl">
+                  يَا أَيُّهَا الَّذِينَ آَمَنُوا اصْبِرُوا وَصَابِرُوا وَرَابِطُوا وَاتَّقُوا اللَّهَ لَعَلَّكُمْ تُفْلِحُونَ
+                </p>
+                <p className="text-slate-600 dark:text-slate-400 italic leading-relaxed">
+                  “Hai orang-orang yang beriman, bersabarlah kamu dan kuatkanlah kesabaranmu dan tetaplah bersiap siaga dan bertakwalah kepada Allah, supaya kamu beruntung.”
+                </p>
+                <p className="text-xs text-slate-400 mt-2 font-bold uppercase tracking-widest">
+                  (QS. Ali Imron [3] : 200)
+                </p>
+              </div>
+
+              <div className="w-full bg-slate-100 dark:bg-slate-700 h-3 rounded-full overflow-hidden mb-4">
+                <motion.div 
+                  initial={{ width: 0 }}
+                  animate={{ width: `${uploadProgress}%` }}
+                  className="bg-indigo-600 h-full transition-all duration-300" 
+                />
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-indigo-600 dark:text-indigo-400 font-black text-2xl">{uploadProgress}%</span>
+                <span className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">Sabar sejenak, sedang mengunggah...</span>
               </div>
             </div>
-            <div className="p-4 opacity-50">
-              <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-3/4 mb-2"></div>
-              <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/2"></div>
-            </div>
-          </div>
+          </motion.div>
         )}
+      </AnimatePresence>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
         {media.map((item: any) => (
           <motion.div 
             layout
@@ -1539,8 +1666,8 @@ const Streams = () => {
     youtube_channel_id: "",
     rtmp_url: "rtmps://a.rtmp.youtube.com/live2",
     stream_key: "",
-    bitrate: 3000,
-    resolution: "1280x720",
+    bitrate: 6000,
+    resolution: "1920x1080",
     loop: true,
     duration: -1,
     start_time: "12:00",
@@ -1573,6 +1700,38 @@ const Streams = () => {
     youtube_who_can_comment: "anyone",
     youtube_sort_by: "top"
   });
+
+  const [aiKeywords, setAiKeywords] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  const handleAiGenerate = async () => {
+    if (!aiKeywords) return;
+    setIsGenerating(true);
+    try {
+      const res = await fetch("/api/metadata-slots/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: aiKeywords })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFormData({
+          ...formData,
+          name: data.title,
+          description: data.description,
+          youtube_tags: data.tags
+        });
+        alert("AI Metadata generated successfully!");
+      } else {
+        alert(data.error || "Failed to generate AI metadata");
+      }
+    } catch (err) {
+      console.error("AI Generation error:", err);
+      alert("An error occurred while generating AI metadata");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   const fetchStreams = async () => {
     const data = await fetchJson("/api/streams");
@@ -1619,7 +1778,8 @@ const Streams = () => {
       playlist_id: formData.playlist_id || null,
       video_id: formData.video_id || null,
       youtube_channel_id: formData.youtube_channel_id || null,
-      bitrate: Number(formData.bitrate) || 3000,
+      bitrate: Number(formData.bitrate) || 6000,
+      resolution: formData.resolution || "1920x1080",
       duration: Number(formData.duration) || -1,
       repeat_date: Number(formData.repeat_date) || 1,
       schedule_enabled: formData.schedule_enabled ? 1 : 0,
@@ -1741,11 +1901,11 @@ const Streams = () => {
   ];
 
   const qualityPresets = [
-    { id: '4k', name: '4K Ultra HD', resolution: '3840x2160', bitrate: 12000, description: 'High quality, requires fast internet' },
-    { id: '1080p_high', name: '1080p High', resolution: '1920x1080', bitrate: 6500, description: 'Best for most streams' },
-    { id: '1080p', name: '1080p Standard', resolution: '1920x1080', bitrate: 4500, description: 'Good balance' },
-    { id: '720p', name: '720p HD', resolution: '1280x720', bitrate: 2500, description: 'Safe for most connections' },
-    { id: '480p', name: '480p SD', resolution: '854x480', bitrate: 1500, description: 'Low bandwidth' }
+    { id: '4k', name: '4K Ultra HD', resolution: '3840x2160', bitrate: 23500, description: 'YouTube Recommended for 4K' },
+    { id: '1080p_high', name: '1080p High', resolution: '1920x1080', bitrate: 8000, description: 'Best for high-motion content' },
+    { id: '1080p', name: '1080p Standard', resolution: '1920x1080', bitrate: 6000, description: 'Recommended default' },
+    { id: '720p', name: '720p HD', resolution: '1280x720', bitrate: 4000, description: 'Good for stable streams' },
+    { id: '480p', name: '480p SD', resolution: '854x480', bitrate: 2000, description: 'Low bandwidth' }
   ];
 
   return (
@@ -1769,8 +1929,8 @@ const Streams = () => {
               youtube_channel_id: "",
               rtmp_url: "rtmps://a.rtmp.youtube.com/live2",
               stream_key: "",
-              bitrate: 3000,
-              resolution: "1280x720",
+              bitrate: 6000,
+              resolution: "1920x1080",
               loop: true,
               duration: -1,
               start_time: "12:00",
@@ -1818,6 +1978,37 @@ const Streams = () => {
           className="bg-white dark:bg-slate-900 p-8 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl"
         >
           <h2 className="text-xl font-bold mb-6 text-slate-800 dark:text-white">{editingStream ? 'Edit Stream' : 'Create New Stream'}</h2>
+          
+          <div className="mb-8 p-6 bg-indigo-50 dark:bg-indigo-900/10 rounded-2xl border border-indigo-100 dark:border-indigo-800/50">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200 dark:shadow-none">
+                <Wand2 size={20} />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-800 dark:text-white">AI Metadata Generator</h3>
+                <p className="text-xs text-slate-500">Generate judul, deskripsi, dan tag otomatis</p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <input 
+                type="text" 
+                placeholder="Masukkan kata kunci (misal: Murottal Pagi, Ceramah Lucu...)" 
+                value={aiKeywords}
+                onChange={e => setAiKeywords(e.target.value)}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button 
+                type="button"
+                onClick={handleAiGenerate}
+                disabled={isGenerating || !aiKeywords}
+                className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2"
+              >
+                {isGenerating ? <RefreshCw size={18} className="animate-spin" /> : <Sparkles size={18} />}
+                Generate
+              </button>
+            </div>
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
@@ -2124,32 +2315,6 @@ const Streams = () => {
 
                 <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center justify-between">
                   Scheduling
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <div className="relative">
-                        <input 
-                          type="checkbox" 
-                          checked={formData.use_ai_metadata}
-                          onChange={e => setFormData({...formData, use_ai_metadata: e.target.checked})}
-                          className="sr-only peer"
-                        />
-                        <div className="w-8 h-4 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:bg-emerald-600 transition-all after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
-                      </div>
-                      <span className="text-xs font-bold text-slate-500 group-hover:text-emerald-600 transition-colors">Use AI Metadata</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer group">
-                      <div className="relative">
-                        <input 
-                          type="checkbox" 
-                          checked={formData.schedule_enabled}
-                          onChange={e => setFormData({...formData, schedule_enabled: e.target.checked})}
-                          className="sr-only peer"
-                        />
-                        <div className="w-8 h-4 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:bg-indigo-600 transition-all after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
-                      </div>
-                      <span className="text-xs font-bold text-slate-500 group-hover:text-indigo-600 transition-colors">Enable Schedule</span>
-                    </label>
-                  </div>
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="space-y-2">
@@ -2631,7 +2796,8 @@ const UserManagement = () => {
     password: "",
     role: "member",
     status: "active",
-    storage_limit: 10
+    storage_limit: 10,
+    expires_at: ""
   });
 
   const fetchUsers = async () => {
@@ -2648,16 +2814,21 @@ const UserManagement = () => {
     const url = editingUser ? `/api/users/${editingUser.id}` : "/api/users";
     const method = editingUser ? "PUT" : "POST";
     
+    const submitData = {
+      ...formData,
+      expires_at: formData.expires_at || null
+    };
+
     const res = await fetch(url, {
       method,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(formData)
+      body: JSON.stringify(submitData)
     });
     
     if (res.ok) {
       setIsCreating(false);
       setEditingUser(null);
-      setFormData({ username: "", password: "", role: "member", status: "active", storage_limit: 10 });
+      setFormData({ username: "", password: "", role: "member", status: "active", storage_limit: 10, expires_at: "" });
       fetchUsers();
     } else {
       const data = await res.json();
@@ -2675,6 +2846,15 @@ const UserManagement = () => {
     }
   };
 
+  const extendUser = async (id: number, months: number) => {
+    const res = await fetch(`/api/users/${id}/extend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ months })
+    });
+    if (res.ok) fetchUsers();
+  };
+
   return (
     <div className="space-y-8">
       <header className="flex items-center justify-between">
@@ -2683,7 +2863,7 @@ const UserManagement = () => {
           <p className="text-slate-500 dark:text-slate-400">Manage system users and storage limits</p>
         </div>
         <button 
-          onClick={() => { setIsCreating(true); setEditingUser(null); setFormData({ username: "", password: "", role: "member", status: "active", storage_limit: 10 }); }}
+          onClick={() => { setIsCreating(true); setEditingUser(null); setFormData({ username: "", password: "", role: "member", status: "active", storage_limit: 10, expires_at: "" }); }}
           className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all"
         >
           <UserPlus size={20} />
@@ -2756,6 +2936,42 @@ const UserManagement = () => {
                 required
               />
             </div>
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">Expires At</label>
+              <div className="space-y-3">
+                <input 
+                  type="datetime-local" 
+                  value={formData.expires_at ? format(new Date(formData.expires_at), "yyyy-MM-dd'T'HH:mm") : ""}
+                  onChange={e => setFormData({...formData, expires_at: e.target.value})}
+                  className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <div className="flex flex-wrap gap-2">
+                  {[1, 3, 6, 12].map(m => (
+                    <button 
+                      key={m}
+                      type="button"
+                      onClick={() => {
+                        const now = new Date();
+                        let base = formData.expires_at ? new Date(formData.expires_at) : now;
+                        if (base < now) base = now;
+                        const next = addMonths(base, m);
+                        setFormData({...formData, expires_at: next.toISOString()});
+                      }}
+                      className="text-[10px] font-black bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 px-3 py-2 rounded-xl hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all uppercase tracking-widest"
+                    >
+                      +{m} Bulan
+                    </button>
+                  ))}
+                  <button 
+                    type="button"
+                    onClick={() => setFormData({...formData, expires_at: ""})}
+                    className="text-[10px] font-black bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-3 py-2 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all uppercase tracking-widest"
+                  >
+                    Never
+                  </button>
+                </div>
+              </div>
+            </div>
             <div className="md:col-span-2 flex justify-end gap-3 pt-4">
               <button 
                 type="button"
@@ -2783,6 +2999,7 @@ const UserManagement = () => {
               <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Role</th>
               <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Status</th>
               <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Storage</th>
+              <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Expires At</th>
               <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Actions</th>
             </tr>
           </thead>
@@ -2826,6 +3043,29 @@ const UserManagement = () => {
                     <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">{u.storage_limit} GB</span>
                   </div>
                 </td>
+                <td className="px-6 py-4">
+                  <div className="flex flex-col gap-1">
+                    <span className={cn(
+                      "text-xs font-bold",
+                      u.expires_at && new Date(u.expires_at) < new Date() ? "text-red-500" : "text-slate-600 dark:text-slate-400"
+                    )}>
+                      {u.expires_at ? format(new Date(u.expires_at), "MMM d, yyyy HH:mm") : "Selamanya"}
+                    </span>
+                    {u.role !== 'admin' && (
+                      <div className="flex gap-1">
+                        {[1, 3, 6, 12].map(m => (
+                          <button 
+                            key={m}
+                            onClick={() => extendUser(u.id, m)}
+                            className="text-[9px] font-black bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 px-1.5 py-0.5 rounded hover:bg-indigo-100 transition-all"
+                          >
+                            +{m}M
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </td>
                 <td className="px-6 py-4 text-right">
                   <div className="flex items-center justify-end gap-2">
                     <button 
@@ -2836,7 +3076,8 @@ const UserManagement = () => {
                           password: "", 
                           role: u.role, 
                           status: u.status, 
-                          storage_limit: u.storage_limit 
+                          storage_limit: u.storage_limit,
+                          expires_at: u.expires_at || ""
                         });
                       }}
                       className="p-2 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
@@ -3363,7 +3604,18 @@ const AIMetadataPage = () => {
                       Used
                     </span>
                   )}
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-white line-clamp-1">{slot.title}</h3>
+                  <h3 className="text-lg font-bold text-slate-800 dark:text-white line-clamp-1">
+                    {slot.title} {slot.sub_index > 0 && <span className="text-indigo-500">#{slot.sub_index}</span>}
+                  </h3>
+                  {slot.tags && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {slot.tags.split(',').map((tag: string, i: number) => (
+                        <span key={i} className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[9px] font-bold rounded-full">
+                          #{tag.trim()}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <button
@@ -3481,15 +3733,36 @@ const AIMetadataPage = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Last Number Used</label>
+                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Tags (comma separated)</label>
                     <input
-                      type="number"
-                      value={editingSlot.last_number || 0}
-                      onChange={e => setEditingSlot({ ...editingSlot, last_number: parseInt(e.target.value) })}
+                      type="text"
+                      value={editingSlot.tags || ""}
+                      onChange={e => setEditingSlot({ ...editingSlot, tags: e.target.value })}
                       className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="tag1, tag2, tag3"
                     />
-                    <p className="text-[10px] text-slate-500 italic">This number will be incremented and appended to the title when used (e.g. Title #1).</p>
                   </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Last Number Used</label>
+                      <input
+                        type="number"
+                        value={editingSlot.last_number || 0}
+                        onChange={e => setEditingSlot({ ...editingSlot, last_number: parseInt(e.target.value) })}
+                        className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Sub Index</label>
+                      <input
+                        type="number"
+                        value={editingSlot.sub_index || 0}
+                        onChange={e => setEditingSlot({ ...editingSlot, sub_index: parseInt(e.target.value) })}
+                        className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-slate-500 italic">Numbering will follow: Title #LastNumber-SubIndex (e.g. Title #3-1).</p>
                 </div>
                 <div className="p-6 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-3">
                   <button
