@@ -19,6 +19,7 @@ import checkDiskSpace from "check-disk-space";
 import { GoogleGenAI } from "@google/genai";
 import axios from "axios";
 import { File as MegaFile } from "megajs";
+import Busboy from "busboy";
 
 const execAsync = promisify(exec);
 
@@ -1292,61 +1293,96 @@ app.put("/api/me", requireAuth, (req, res) => {
 });
 
 // Media
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => {
-    // Preserve original filename but ensure it's unique if needed
-    // However, user specifically asked: "tidak perlu ditambahkan nama (nomor) file, cukup memakai nama file bawaan"
-    // To avoid collisions if multiple users upload same name, we might still need something, 
-    // but I will follow the request strictly.
-    cb(null, file.originalname);
-  }
-});
-const upload = multer({ storage });
-
-app.post("/api/media/upload", requireAuth, upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
+app.post("/api/media/upload", requireAuth, (req, res) => {
   const userId = req.session.user.id;
   const user = db.prepare("SELECT storage_limit FROM users WHERE id = ?").get(userId) as any;
-  
-  // Calculate current storage usage using the size column
   const mediaUsage = db.prepare("SELECT SUM(size) as total_size FROM media WHERE user_id = ?").get(userId) as any;
   const totalUsage = mediaUsage.total_size || 0;
-
   const limitBytes = (user.storage_limit || 10) * 1024 * 1024 * 1024;
-  if (totalUsage + req.file.size > limitBytes) {
-    fs.unlinkSync(req.file.path);
+
+  const contentLength = parseInt(req.headers['content-length'] || '0');
+  if (contentLength > 0 && totalUsage + contentLength > limitBytes) {
     return res.status(400).json({ error: "Storage limit exceeded. Your storage is full." });
   }
 
-  const filepath = req.file.path;
-  const filename = req.file.filename;
-  const thumbnailName = filename + ".jpg";
+  const bb = Busboy({ headers: req.headers });
+  let fileProcessed = false;
 
-  ffmpeg(filepath)
-    .screenshots({
-      timestamps: ["00:00:01"],
-      filename: thumbnailName,
-      folder: THUMBNAILS_DIR,
-      size: "320x180"
-    })
-    .on("end", () => {
-      ffmpeg.ffprobe(filepath, (err, metadata) => {
-        const duration = metadata?.format?.duration || 0;
-        const result = db.prepare("INSERT INTO media (user_id, filename, filepath, duration, thumbnail_path, size, status) VALUES (?, ?, ?, ?, ?, ?, ?)")
-          .run(userId, filename, filepath, Math.round(duration), thumbnailName, req.file.size, 'ready');
-        logAction(userId, req.session.user.username, "Media Uploaded", `Uploaded ${filename}`);
-        
-        // Trigger pre-encoding
-        encodeVideo(Number(result.lastInsertRowid));
-        
-        res.json({ success: true });
-      });
-    })
-    .on("error", (err) => {
-      res.status(500).json({ error: "Failed to process video" });
+  bb.on('file', (name, file, info) => {
+    const { filename, encoding, mimeType } = info;
+    if (name !== 'file') {
+      file.resume();
+      return;
+    }
+
+    fileProcessed = true;
+    const saveTo = path.join(UPLOADS_DIR, filename);
+    const writeStream = fs.createWriteStream(saveTo);
+    let fileSize = 0;
+
+    file.on('data', (data) => {
+      fileSize += data.length;
+      // Optional: Real-time storage check
+      if (totalUsage + fileSize > limitBytes) {
+        writeStream.destroy();
+        file.resume();
+        if (!res.headersSent) {
+          res.status(400).json({ error: "Storage limit exceeded during upload." });
+        }
+        try { fs.unlinkSync(saveTo); } catch (e) {}
+      }
     });
+
+    file.pipe(writeStream);
+
+    writeStream.on('finish', () => {
+      if (res.headersSent) return;
+
+      const thumbnailName = filename + ".jpg";
+      const filepath = saveTo;
+
+      ffmpeg(filepath)
+        .screenshots({
+          timestamps: ["00:00:01"],
+          filename: thumbnailName,
+          folder: THUMBNAILS_DIR,
+          size: "320x180"
+        })
+        .on("end", () => {
+          ffmpeg.ffprobe(filepath, (err, metadata) => {
+            const duration = metadata?.format?.duration || 0;
+            const result = db.prepare("INSERT INTO media (user_id, filename, filepath, duration, thumbnail_path, size, status) VALUES (?, ?, ?, ?, ?, ?, ?)")
+              .run(userId, filename, filepath, Math.round(duration), thumbnailName, fileSize, 'ready');
+            logAction(userId, req.session.user.username, "Media Uploaded", `Uploaded ${filename} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
+            
+            encodeVideo(Number(result.lastInsertRowid));
+            res.json({ success: true });
+          });
+        })
+        .on("error", (err) => {
+          console.error("FFmpeg error during upload processing:", err);
+          res.status(500).json({ error: "Failed to process video thumbnails" });
+        });
+    });
+
+    writeStream.on('error', (err) => {
+      console.error("Write stream error:", err);
+      if (!res.headersSent) res.status(500).json({ error: "Failed to write file to disk" });
+    });
+  });
+
+  bb.on('error', (err) => {
+    console.error("Busboy error:", err);
+    if (!res.headersSent) res.status(500).json({ error: "Upload failed" });
+  });
+
+  bb.on('finish', () => {
+    if (!fileProcessed && !res.headersSent) {
+      res.status(400).json({ error: "No file uploaded" });
+    }
+  });
+
+  req.pipe(bb);
 });
 
 app.get("/api/user/storage", requireAuth, (req, res) => {
@@ -2424,9 +2460,14 @@ async function startServer() {
   }
 
   const PORT = 3000;
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`SaungStream running on http://localhost:${PORT}`);
   });
+
+  // Increase timeouts for large file uploads
+  server.timeout = 0; // No timeout
+  server.keepAliveTimeout = 60000; // 60 seconds
+  server.headersTimeout = 65000; // Slightly more than keepAliveTimeout
 }
 
 process.on('uncaughtException', (err) => {

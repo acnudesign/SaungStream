@@ -10,13 +10,10 @@ module.exports = {
       },
     },
     {
-      name: 'ngrok',
-      script: 'ngrok',
-      args: 'http 3000',
-      env: {
-        NGROK_AUTHTOKEN: 'YOUR_NGROK_AUTHTOKEN_HERE'
-      },
-      // Set to false by default, user can enable it if they have ngrok installed
+      name: 'cloudflared',
+      script: 'cloudflared',
+      args: 'tunnel run saungstream',
+      // Set to false by default, user can enable it if they have cloudflared installed
       autorestart: true,
       watch: false
     }

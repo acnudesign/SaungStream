@@ -49,5 +49,5 @@ pm2 startup
 echo "--------------------------------------------------"
 echo "Installation Complete!"
 echo "Default Credentials: admin / admin"
-echo "To expose to internet using ngrok, follow the README guide."
+echo "To expose to internet using Cloudflare Tunnel, follow the README guide."
 echo "--------------------------------------------------"

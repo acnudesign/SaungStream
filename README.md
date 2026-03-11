@@ -104,27 +104,35 @@ pm2 startup
 - `pm2 restart saungstream`: Restart the application.
 - `pm2 stop saungstream`: Stop the application.
 
-## Exposing to Internet with Ngrok
+## Exposing to Internet with Cloudflare Tunnel
 
-To make your local server accessible from the internet, you can use **ngrok**.
+To make your local server accessible from the internet securely, we recommend using **Cloudflare Tunnel**.
 
-### 1. Install Ngrok
+### 1. Install Cloudflared
 ```bash
-curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null && echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list && sudo apt update && sudo apt install ngrok
+curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+sudo dpkg -i cloudflared.deb
 ```
 
-### 2. Configure Auth Token
-Get your token from [ngrok.com](https://dashboard.ngrok.com/get-started/your-authtoken).
+### 2. Authenticate Cloudflared
 ```bash
-ngrok config add-authtoken YOUR_AUTHTOKEN
+cloudflared tunnel login
 ```
 
-### 3. Run with PM2
-We have included an ngrok configuration in `ecosystem.config.cjs`. You can start it using:
+### 3. Create a Tunnel
 ```bash
-pm2 start ngrok
+cloudflared tunnel create saungstream
 ```
-*Note: Make sure to update your authtoken in `ecosystem.config.cjs` if you use this method, or just run `ngrok http 3000` manually.*
+
+### 4. Configure the Tunnel
+Create a configuration file or use the Cloudflare Dashboard to point your domain to `http://localhost:3000`.
+
+### 5. Run with PM2
+We have included a Cloudflare configuration in `ecosystem.config.cjs`. You can start it using:
+```bash
+pm2 start cloudflared
+```
+*Note: Make sure to update your tunnel name or ID in `ecosystem.config.cjs` if you use this method, or just run `cloudflared tunnel run saungstream` manually.*
 
 ## Default Credentials
 - **Username**: admin
