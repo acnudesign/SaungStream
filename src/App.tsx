@@ -607,68 +607,119 @@ const LoginPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6 transition-colors duration-200">
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md bg-white dark:bg-slate-900 p-10 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl shadow-indigo-100 dark:shadow-none"
-      >
-        <div className="text-center mb-10">
-          <div className="flex justify-center mb-6">
-            <img 
-              src="/assets/logo.svg" 
-              alt="SaungStream Logo" 
-              className="h-16 w-auto object-contain"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = "https://picsum.photos/seed/saungstream/300/100";
-              }}
-            />
-          </div>
-          <p className="text-slate-500 dark:text-slate-400 font-medium italic">Bismillah semoga berkah ikhtiar ini</p>
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col transition-colors duration-200">
+      {/* Public Header for Google Verification */}
+      <header className="w-full py-6 px-8 flex justify-between items-center bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
+        <div className="flex items-center gap-3">
+          <img 
+            src="/assets/logo.svg" 
+            alt="SaungStream Logo" 
+            className="h-10 w-auto object-contain"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = "https://picsum.photos/seed/saungstream/300/100";
+            }}
+          />
+          <span className="text-2xl font-black text-slate-800 dark:text-white tracking-tight">SaungStream</span>
         </div>
+        <div className="hidden sm:flex gap-6">
+          <Link to="/privacy" className="text-sm font-bold text-slate-500 hover:text-indigo-600 transition-colors">Privacy Policy</Link>
+          <Link to="/terms" className="text-sm font-bold text-slate-500 hover:text-indigo-600 transition-colors">Terms of Service</Link>
+        </div>
+      </header>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {error && (
-            <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm font-bold rounded-xl flex items-center gap-2">
-              <AlertCircle size={18} />
-              {error}
+      <div className="flex-1 flex flex-col lg:flex-row">
+        {/* Left Side: App Purpose & Marketing (For Google Bot) */}
+        <div className="flex-1 p-8 lg:p-20 flex flex-col justify-center">
+          <div className="max-w-xl">
+            <h1 className="text-5xl lg:text-6xl font-black text-slate-900 dark:text-white leading-tight mb-6">
+              Manage Your <span className="text-indigo-600">YouTube Streams</span> with Ease.
+            </h1>
+            <p className="text-xl text-slate-600 dark:text-slate-400 mb-10 leading-relaxed">
+              SaungStream is a powerful management tool designed for content creators. 
+              Schedule broadcasts, manage your media library, and go live on YouTube 
+              seamlessly using our integrated YouTube API tools.
+            </p>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <div className="p-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-xl flex items-center justify-center mb-4">
+                  <Youtube size={20} />
+                </div>
+                <h3 className="font-bold dark:text-white mb-2">YouTube Integration</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Connect your channel and manage live broadcasts directly from your dashboard.</p>
+              </div>
+              <div className="p-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                <div className="w-10 h-10 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-xl flex items-center justify-center mb-4">
+                  <Calendar size={20} />
+                </div>
+                <h3 className="font-bold dark:text-white mb-2">Smart Scheduling</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Plan your content ahead of time with our intuitive scheduling system.</p>
+              </div>
             </div>
-          )}
-          <div className="space-y-2">
-            <label className="text-sm font-bold text-slate-700 dark:text-slate-300 ml-1">Username</label>
-            <input 
-              type="text" 
-              value={username}
-              onChange={e => setUsername(e.target.value)}
-              className="w-full px-5 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium"
-              placeholder="Enter your username"
-              required
-            />
           </div>
-          <div className="space-y-2">
-            <label className="text-sm font-bold text-slate-700 dark:text-slate-300 ml-1">Password</label>
-            <input 
-              type="password" 
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="w-full px-5 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium"
-              placeholder="Enter your password"
-              required
-            />
-          </div>
-          <button 
-            type="submit"
-            className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-xl shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all"
-          >
-            Sign In
-          </button>
-        </form>
-
-        <div className="mt-8 pt-6 border-t border-slate-100 dark:border-slate-800 flex justify-center gap-6">
-          <Link to="/terms" className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors">Terms of Service</Link>
-          <Link to="/privacy" className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors">Privacy Policy</Link>
         </div>
-      </motion.div>
+
+        {/* Right Side: Login Form */}
+        <div className="w-full lg:w-[480px] p-8 lg:p-20 flex items-center justify-center bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800">
+          <div className="w-full max-w-sm">
+            <div className="mb-10">
+              <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">Welcome Back</h2>
+              <p className="text-slate-500 dark:text-slate-400">Please enter your credentials to access the dashboard.</p>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-6">
+              {error && (
+                <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm font-bold rounded-xl flex items-center gap-2">
+                  <AlertCircle size={18} />
+                  {error}
+                </div>
+              )}
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700 dark:text-slate-300 ml-1">Username</label>
+                <input 
+                  type="text" 
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  className="w-full px-5 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium"
+                  placeholder="Enter your username"
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700 dark:text-slate-300 ml-1">Password</label>
+                <input 
+                  type="password" 
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  className="w-full px-5 py-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium"
+                  placeholder="Enter your password"
+                  required
+                />
+              </div>
+              <button 
+                type="submit"
+                className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-xl shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all"
+              >
+                Sign In
+              </button>
+            </form>
+
+            <div className="mt-10 pt-8 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-4">
+              <p className="text-xs text-slate-400 dark:text-slate-500 font-medium italic text-center">Bismillah semoga berkah ikhtiar ini</p>
+              <div className="flex justify-center gap-6">
+                <Link to="/terms" className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors">Terms of Service</Link>
+                <Link to="/privacy" className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors">Privacy Policy</Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Mobile Footer Links */}
+      <footer className="sm:hidden p-8 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex justify-center gap-8">
+        <Link to="/privacy" className="text-sm font-bold text-slate-500">Privacy Policy</Link>
+        <Link to="/terms" className="text-sm font-bold text-slate-500">Terms of Service</Link>
+      </footer>
     </div>
   );
 };
@@ -3194,83 +3245,95 @@ const AIMetadataPage = () => {
   );
 };
 
-const TermsOfService = () => (
-  <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-6 lg:p-20">
-    <div className="max-w-4xl mx-auto bg-white dark:bg-slate-900 p-8 lg:p-12 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl">
-      <h1 className="text-3xl font-black text-slate-800 dark:text-white mb-8">Terms of Service</h1>
-      <div className="prose dark:prose-invert max-w-none space-y-6 text-slate-600 dark:text-slate-400">
-        <section>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">1. Acceptance of Terms</h2>
-          <p>By accessing and using SaungStream, you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the service.</p>
-        </section>
-        <section>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">2. Description of Service</h2>
-          <p>SaungStream is a cloud-based streaming management tool that allows users to schedule and broadcast video content to platforms like YouTube using the YouTube API Services.</p>
-        </section>
-        <section>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">3. User Responsibilities</h2>
-          <p>You are responsible for the content you stream and must ensure it complies with the terms of service of the destination platforms (e.g., YouTube Community Guidelines).</p>
-        </section>
-        <section>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">4. YouTube API Services</h2>
-          <p>Our service uses YouTube API Services. By using SaungStream to stream to YouTube, you are also agreeing to be bound by the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">YouTube Terms of Service</a>.</p>
-        </section>
-        <section>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">5. Limitation of Liability</h2>
-          <p>SaungStream is provided "as is" without any warranties. We are not liable for any damages resulting from the use or inability to use the service.</p>
-        </section>
-        <div className="pt-8 border-t border-slate-100 dark:border-slate-800">
-          <Link to="/login" className="text-indigo-600 font-bold hover:underline flex items-center gap-2">
-            <ChevronLeft size={16} /> Back to Login
-          </Link>
-        </div>
-      </div>
-    </div>
-  </div>
-);
+const TermsOfService = () => {
+  useEffect(() => {
+    document.title = "Terms of Service - SaungStream";
+  }, []);
 
-const PrivacyPolicy = () => (
-  <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-6 lg:p-20">
-    <div className="max-w-4xl mx-auto bg-white dark:bg-slate-900 p-8 lg:p-12 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl">
-      <h1 className="text-3xl font-black text-slate-800 dark:text-white mb-8">Privacy Policy</h1>
-      <div className="prose dark:prose-invert max-w-none space-y-6 text-slate-600 dark:text-slate-400">
-        <section>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">1. Information We Collect</h2>
-          <p>We collect information necessary to provide our streaming services, including:</p>
-          <ul className="list-disc ml-6 space-y-2">
-            <li>Account information (username, email).</li>
-            <li>YouTube account metadata (channel ID, broadcast IDs) via YouTube API Services when you connect your channel.</li>
-          </ul>
-        </section>
-        <section>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">2. How We Use Your Information</h2>
-          <p>We use your information to:</p>
-          <ul className="list-disc ml-6 space-y-2">
-            <li>Manage your streaming schedules and broadcasts.</li>
-            <li>Authenticate your access to the YouTube API to perform streaming actions on your behalf.</li>
-          </ul>
-        </section>
-        <section>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">3. Data Sharing and Third Parties</h2>
-          <p>We do not sell your personal data. We share data with YouTube API Services to facilitate your live streams. You can manage SaungStream's access to your data via the <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Google security settings page</a>.</p>
-        </section>
-        <section>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">4. Data Retention</h2>
-          <p>We retain your data as long as your account is active. You can request data deletion by contacting the administrator or disconnecting your YouTube channel.</p>
-        </section>
-        <section>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">5. Google Privacy Policy</h2>
-          <p>For more information on how Google manages your data, please refer to the <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Google Privacy Policy</a>.</p>
-        </section>
-        <div className="pt-8 border-t border-slate-100 dark:border-slate-800">
-          <Link to="/login" className="text-indigo-600 font-bold hover:underline flex items-center gap-2">
-            <ChevronLeft size={16} /> Back to Login
-          </Link>
+  return (
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-6 lg:p-20">
+      <div className="max-w-4xl mx-auto bg-white dark:bg-slate-900 p-8 lg:p-12 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl">
+        <h1 className="text-3xl font-black text-slate-800 dark:text-white mb-8">Terms of Service</h1>
+        <div className="prose dark:prose-invert max-w-none space-y-6 text-slate-600 dark:text-slate-400">
+          <section>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">1. Acceptance of Terms</h2>
+            <p>By accessing and using SaungStream, you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the service.</p>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">2. Description of Service</h2>
+            <p>SaungStream is a cloud-based streaming management tool that allows users to schedule and broadcast video content to platforms like YouTube using the YouTube API Services.</p>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">3. User Responsibilities</h2>
+            <p>You are responsible for the content you stream and must ensure it complies with the terms of service of the destination platforms (e.g., YouTube Community Guidelines).</p>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">4. YouTube API Services</h2>
+            <p>Our service uses YouTube API Services. By using SaungStream to stream to YouTube, you are also agreeing to be bound by the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">YouTube Terms of Service</a>.</p>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">5. Limitation of Liability</h2>
+            <p>SaungStream is provided "as is" without any warranties. We are not liable for any damages resulting from the use or inability to use the service.</p>
+          </section>
+          <div className="pt-8 border-t border-slate-100 dark:border-slate-800">
+            <Link to="/login" className="text-indigo-600 font-bold hover:underline flex items-center gap-2">
+              <ChevronLeft size={16} /> Back to Login
+            </Link>
+          </div>
         </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
+
+const PrivacyPolicy = () => {
+  useEffect(() => {
+    document.title = "Privacy Policy - SaungStream";
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-6 lg:p-20">
+      <div className="max-w-4xl mx-auto bg-white dark:bg-slate-900 p-8 lg:p-12 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl">
+        <h1 className="text-3xl font-black text-slate-800 dark:text-white mb-8">Privacy Policy</h1>
+        <div className="prose dark:prose-invert max-w-none space-y-6 text-slate-600 dark:text-slate-400">
+          <section>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">1. Information We Collect</h2>
+            <p>We collect information necessary to provide our streaming services, including:</p>
+            <ul className="list-disc ml-6 space-y-2">
+              <li>Account information (username, email).</li>
+              <li>YouTube account metadata (channel ID, broadcast IDs) via YouTube API Services when you connect your channel.</li>
+            </ul>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">2. How We Use Your Information</h2>
+            <p>We use your information to:</p>
+            <ul className="list-disc ml-6 space-y-2">
+              <li>Manage your streaming schedules and broadcasts.</li>
+              <li>Authenticate your access to the YouTube API to perform streaming actions on your behalf.</li>
+            </ul>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">3. Data Sharing and Third Parties</h2>
+            <p>We do not sell your personal data. We share data with YouTube API Services to facilitate your live streams. You can manage SaungStream's access to your data via the <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Google security settings page</a>.</p>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">4. Data Retention</h2>
+            <p>We retain your data as long as your account is active. You can request data deletion by contacting the administrator or disconnecting your YouTube channel.</p>
+          </section>
+          <section>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-3">5. Google Privacy Policy</h2>
+            <p>For more information on how Google manages your data, please refer to the <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Google Privacy Policy</a>.</p>
+          </section>
+          <div className="pt-8 border-t border-slate-100 dark:border-slate-800">
+            <Link to="/login" className="text-indigo-600 font-bold hover:underline flex items-center gap-2">
+              <ChevronLeft size={16} /> Back to Login
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // --- App Router ---
 
