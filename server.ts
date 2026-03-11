@@ -790,9 +790,21 @@ import { google } from "googleapis";
 
 const getOAuth2Client = (req: any) => {
   // Detect protocol and host dynamically to support custom domains like app.saungstream.my.id
-  const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
-  const host = req.get('x-forwarded-host') || req.get('host');
+  let protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
+  let host = req.get('x-forwarded-host') || req.get('host');
+  
+  // Force https for non-localhost environments (Cloud Run/Production)
+  if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
+    protocol = 'https';
+  }
+  
+  // Strip default ports (80, 443) as Google is strict about exact matches
+  if (host && (host.endsWith(':80') || host.endsWith(':443'))) {
+    host = host.split(':')[0];
+  }
+
   const redirectUri = `${protocol}://${host}/api/auth/youtube/callback`;
+  console.log(`YouTube OAuth Redirect URI: ${redirectUri}`);
   
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
