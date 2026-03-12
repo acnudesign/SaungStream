@@ -649,9 +649,11 @@ class StreamManager {
           "-tune", useOptimization ? "zerolatency" : "main",
           "-b:v", `${stream.bitrate}k`,
           "-maxrate", `${stream.bitrate}k`,
-          "-bufsize", useOptimization ? `${stream.bitrate}k` : `${stream.bitrate * 2}k`,
+          "-bufsize", `${stream.bitrate * 2}k`,
           "-pix_fmt", "yuv420p",
           "-g", "60",
+          "-keyint_min", "60",
+          "-sc_threshold", "0",
           "-c:a", "aac",
           "-b:a", "128k",
           "-ar", "44100"
@@ -668,7 +670,7 @@ class StreamManager {
 
       if (playlistItems.length === 0) {
         this.log(stream.user_id, "error", `Stream ${stream.name} has no items in playlist.`);
-        return;
+        return { success: false, error: "Playlist is empty" };
       }
 
       const playlistFile = path.join(__dirname, `playlist_${streamId}.txt`);
@@ -692,9 +694,11 @@ class StreamManager {
           "-tune", useOptimization ? "zerolatency" : "main",
           "-b:v", `${stream.bitrate}k`,
           "-maxrate", `${stream.bitrate}k`,
-          "-bufsize", useOptimization ? `${stream.bitrate}k` : `${stream.bitrate * 2}k`,
+          "-bufsize", `${stream.bitrate * 2}k`,
           "-pix_fmt", "yuv420p",
           "-g", "60",
+          "-keyint_min", "60",
+          "-sc_threshold", "0",
           "-c:a", "aac",
           "-b:a", "128k",
           "-ar", "44100"
@@ -1750,7 +1754,7 @@ app.post("/api/streams", requireAuth, (req, res) => {
       youtube_title_description_language, youtube_recording_date, youtube_recording_location,
       youtube_license, youtube_allow_embedding, youtube_publish_to_subscriptions,
       youtube_shorts_remixing, youtube_category, youtube_comments_mode,
-      youtube_who_can_comment, youtube_sort_by
+      youtube_who_can_comment, youtube_sort_by, network_optimization
     } = req.body;
     
     if (!name) {
@@ -1768,9 +1772,9 @@ app.post("/api/streams", requireAuth, (req, res) => {
         youtube_caption_certification, youtube_title_description_language, youtube_recording_date, 
         youtube_recording_location, youtube_license, youtube_allow_embedding, 
         youtube_publish_to_subscriptions, youtube_shorts_remixing, youtube_category, 
-        youtube_comments_mode, youtube_who_can_comment, youtube_sort_by
+        youtube_comments_mode, youtube_who_can_comment, youtube_sort_by, network_optimization
       ) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.session.user.id, 
       name, 
@@ -1814,7 +1818,8 @@ app.post("/api/streams", requireAuth, (req, res) => {
       youtube_category || '24',
       youtube_comments_mode || 'on',
       youtube_who_can_comment || 'anyone',
-      youtube_sort_by || 'top'
+      youtube_sort_by || 'top',
+      network_optimization !== undefined ? (network_optimization ? 1 : 0) : 1
     );
 
     // Mark metadata slot as used if applicable
@@ -1859,7 +1864,7 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
       youtube_title_description_language, youtube_recording_date, youtube_recording_location,
       youtube_license, youtube_allow_embedding, youtube_publish_to_subscriptions,
       youtube_shorts_remixing, youtube_category, youtube_comments_mode,
-      youtube_who_can_comment, youtube_sort_by
+      youtube_who_can_comment, youtube_sort_by, network_optimization
     } = req.body;
     
     if (!name) {
@@ -1879,7 +1884,8 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
           youtube_title_description_language = ?, youtube_recording_date = ?, 
           youtube_recording_location = ?, youtube_license = ?, youtube_allow_embedding = ?, 
           youtube_publish_to_subscriptions = ?, youtube_shorts_remixing = ?, youtube_category = ?, 
-          youtube_comments_mode = ?, youtube_who_can_comment = ?, youtube_sort_by = ?
+          youtube_comments_mode = ?, youtube_who_can_comment = ?, youtube_sort_by = ?,
+          network_optimization = ?
       WHERE id = ? AND user_id = ?
     `).run(
       name, 
@@ -1924,6 +1930,7 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
       youtube_comments_mode || 'on',
       youtube_who_can_comment || 'anyone',
       youtube_sort_by || 'top',
+      network_optimization !== undefined ? (network_optimization ? 1 : 0) : 1,
       req.params.id,
       req.session.user.id
     );
