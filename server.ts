@@ -603,14 +603,24 @@ class StreamManager {
     // Automate YouTube if channel is selected
     if (stream.platform === 'youtube' && stream.youtube_channel_id && !stream.rtmp_url) {
       try {
+        console.log(`Automating YouTube for stream: ${stream.name}`);
         await createYouTubeBroadcast(streamId);
         // Refresh stream data
         const updatedStream = db.prepare("SELECT * FROM streams WHERE id = ?").get(streamId) as any;
         Object.assign(stream, updatedStream);
+        
+        // Give YouTube a moment to prepare the ingestion server
+        console.log("Waiting 3 seconds for YouTube ingestion server to be ready...");
+        await new Promise(resolve => setTimeout(resolve, 3000));
       } catch (err) {
         this.log(stream.user_id, "error", `Failed to automate YouTube for ${stream.name}: ${err}`);
         return;
       }
+    }
+
+    if (!stream.rtmp_url || !stream.stream_key) {
+      this.log(stream.user_id, "error", `Stream ${stream.name} is missing RTMP URL or Stream Key.`);
+      return;
     }
 
     let inputArgs: string[] = [];
@@ -691,8 +701,12 @@ class StreamManager {
       }
     }
 
-    const rtmpDestination = `${stream.rtmp_url}/${stream.stream_key}`;
+    const rtmpBase = stream.rtmp_url.endsWith('/') ? stream.rtmp_url.slice(0, -1) : stream.rtmp_url;
+    const rtmpDestination = `${rtmpBase}/${stream.stream_key}`;
     
+    const maskedKey = stream.stream_key.length > 8 ? stream.stream_key.substring(0, 4) + '...' + stream.stream_key.substring(stream.stream_key.length - 4) : '***';
+    console.log(`Streaming to: ${rtmpBase}/${maskedKey}`);
+
     const args = [
       "-re",
       ...loopFlag,
@@ -701,6 +715,9 @@ class StreamManager {
       "-f", "flv",
       rtmpDestination
     ];
+
+    const maskedArgs = args.map(arg => arg === rtmpDestination ? `${rtmpBase}/${maskedKey}` : arg);
+    this.log(stream.user_id, "info", `Starting FFmpeg for ${stream.name} with command: ffmpeg ${maskedArgs.join(' ')}`);
 
     const ffmpegProcess = spawn("ffmpeg", args);
     this.activeStreams.set(streamId, ffmpegProcess);
@@ -855,7 +872,12 @@ class StreamManager {
   }
 
   private log(userId: number | null, type: string, message: string) {
-    db.prepare("INSERT INTO logs (user_id, type, message) VALUES (?, ?, ?)").run(userId, type, message);
+    try {
+      db.prepare("INSERT INTO logs (user_id, action, message, type) VALUES (?, ?, ?, ?)")
+        .run(userId, "System", message, type);
+    } catch (e) {
+      console.error("Failed to write to logs table:", e);
+    }
   }
 
   isLive(streamId: number) {
@@ -1090,7 +1112,16 @@ async function createYouTubeBroadcast(streamId: number) {
     
     const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
     const tz = timezone ? timezone.value : "UTC";
-    const scheduledTime = getISOWithOffset(stream.start_date, stream.start_time, tz);
+    
+    let scheduledTime = getISOWithOffset(stream.start_date, stream.start_time, tz);
+    
+    // Ensure scheduledStartTime is not in the past
+    const now = new Date();
+    const scheduledDate = new Date(scheduledTime);
+    if (scheduledDate <= now) {
+      // Set to 10 seconds in the future to allow for processing
+      scheduledTime = new Date(now.getTime() + 10000).toISOString();
+    }
 
     let title = stream.name;
     let description = stream.description || "Live Stream via SaungStream";
@@ -1108,6 +1139,19 @@ async function createYouTubeBroadcast(streamId: number) {
       }
     }
 
+    // Map resolution
+    let youtubeResolution = "720p";
+    if (stream.resolution) {
+      if (stream.resolution.includes("1080")) youtubeResolution = "1080p";
+      else if (stream.resolution.includes("720")) youtubeResolution = "720p";
+      else if (stream.resolution.includes("480")) youtubeResolution = "480p";
+      else if (stream.resolution.includes("360")) youtubeResolution = "360p";
+      else if (stream.resolution.includes("1440")) youtubeResolution = "1440p";
+      else if (stream.resolution.includes("2160")) youtubeResolution = "2160p";
+    }
+
+    console.log(`Creating YouTube Broadcast: ${title} at ${scheduledTime} with ${youtubeResolution}`);
+
     // 1. Create Broadcast
     const broadcastRes = await youtube.liveBroadcasts.insert({
       part: ["snippet", "status", "contentDetails"],
@@ -1124,7 +1168,8 @@ async function createYouTubeBroadcast(streamId: number) {
         contentDetails: {
           enableAutoStart: true,
           enableAutoStop: true,
-          enableEmbed: stream.youtube_allow_embedding === 1
+          enableEmbed: stream.youtube_allow_embedding === 1,
+          monitorStream: { enableMonitorStream: false } // Disable monitor to reduce latency and issues
         }
       }
     });
@@ -1205,7 +1250,7 @@ async function createYouTubeBroadcast(streamId: number) {
         cdn: {
           frameRate: "30fps",
           ingestionType: "rtmp",
-          resolution: "720p"
+          resolution: youtubeResolution
         }
       }
     });
@@ -1226,6 +1271,8 @@ async function createYouTubeBroadcast(streamId: number) {
       SET broadcast_id = ?, youtube_stream_id = ?, rtmp_url = ?, stream_key = ? 
       WHERE id = ?
     `).run(broadcastId, youtubeStreamId, rtmpUrl, streamKey, streamId);
+
+    console.log(`YouTube Broadcast bound: ${broadcastId} with stream ${youtubeStreamId}`);
 
     return { rtmpUrl, streamKey };
   } catch (err) {
@@ -1304,62 +1351,72 @@ app.post("/api/merge-chunks", requireAuth, async (req, res) => {
   const chunkDir = path.join(CHUNKS_DIR, fileId);
   const finalPath = path.join(UPLOADS_DIR, fileName);
   
+  // Increase timeout for large file merges
+  req.setTimeout(0);
+  
   console.log(`Starting merge for ${fileName} (${totalChunks} chunks)`);
   
   try {
     const writeStream = fs.createWriteStream(finalPath);
+    const chunksCount = parseInt(totalChunks as string);
     
     // Sequential merge using streams to keep memory usage low
-    for (let i = 0; i < (totalChunks as unknown as number); i++) {
+    for (let i = 0; i < chunksCount; i++) {
       const chunkPath = path.join(chunkDir, i.toString());
       if (fs.existsSync(chunkPath)) {
         await new Promise((resolve, reject) => {
           const readStream = fs.createReadStream(chunkPath);
           readStream.pipe(writeStream, { end: false });
           readStream.on("end", () => {
-            fs.unlinkSync(chunkPath); // Delete chunk after merging
+            try {
+              fs.unlinkSync(chunkPath); // Delete chunk after merging
+            } catch (e) {
+              console.warn(`Failed to delete chunk ${i}:`, e);
+            }
             resolve(true);
           });
           readStream.on("error", reject);
         });
+      } else {
+        console.warn(`Chunk ${i} missing for ${fileName}`);
       }
     }
     
     writeStream.end();
     
-    writeStream.on("finish", async () => {
-      console.log(`Merge finished for ${fileName}`);
-      if (fs.existsSync(chunkDir)) {
-        try {
-          fs.rmdirSync(chunkDir); // Delete chunk directory
-        } catch (e) {}
-      }
-
-      // Get file size
-      const stats = fs.statSync(finalPath);
-      const size = stats.size;
-
-      // Add to database
-      const mediaId = (db.prepare(
-        "INSERT INTO media (user_id, filename, filepath, size, status) VALUES (?, ?, ?, ?, ?)"
-      ).run(req.session.user!.id, fileName, finalPath, size, "ready") as any).lastInsertRowid;
-
-      res.json({ 
-        success: true, 
-        mediaId,
-        url: `/uploads/${fileName}`,
-        message: "File uploaded and merged successfully" 
-      });
+    await new Promise((resolve, reject) => {
+      writeStream.on("finish", () => resolve(true));
+      writeStream.on("error", reject);
     });
 
-    writeStream.on("error", (err) => {
-      console.error("WriteStream error:", err);
-      res.status(500).json({ error: "Failed to write merged file" });
+    console.log(`Merge finished for ${fileName}`);
+    if (fs.existsSync(chunkDir)) {
+      try {
+        fs.rmSync(chunkDir, { recursive: true, force: true }); // Delete chunk directory
+      } catch (e) {}
+    }
+
+    // Get file size
+    const stats = fs.statSync(finalPath);
+    const size = stats.size;
+
+    // Add to database
+    const mediaId = (db.prepare(
+      "INSERT INTO media (user_id, filename, filepath, size, status) VALUES (?, ?, ?, ?, ?)"
+    ).run(req.session.user!.id, fileName, finalPath, size, "ready") as any).lastInsertRowid;
+
+    res.json({ 
+      success: true, 
+      mediaId,
+      url: `/uploads/${fileName}`,
+      message: "File uploaded and merged successfully" 
     });
 
   } catch (error) {
     console.error("Merge error:", error);
-    res.status(500).json({ error: "Failed to merge file chunks" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to merge file chunks: " + (error instanceof Error ? error.message : String(error)) });
+    }
   }
 });
 
