@@ -1703,6 +1703,7 @@ const Streams = () => {
   const [isCreating, setIsCreating] = useState(false);
   const [editingStream, setEditingStream] = useState<any>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [togglingId, setTogglingId] = useState<number | null>(null);
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -1879,7 +1880,19 @@ const Streams = () => {
 
   const toggleStream = async (id: number, status: string) => {
     const action = status === 'live' ? 'stop' : 'start';
-    await fetch(`/api/streams/${id}/${action}`, { method: "POST" });
+    setTogglingId(id);
+    try {
+      const res = await fetch(`/api/streams/${id}/${action}`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || `Failed to ${action} stream`);
+      }
+    } catch (err) {
+      console.error(`Stream ${action} error:`, err);
+      alert(`An error occurred while trying to ${action} the stream`);
+    } finally {
+      setTogglingId(null);
+    }
     fetchStreams();
   };
 
@@ -2628,14 +2641,20 @@ const Streams = () => {
 
                 <button 
                   onClick={() => toggleStream(stream.id, stream.status)}
+                  disabled={togglingId === stream.id}
                   className={cn(
                     "flex items-center gap-2 px-8 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all active:scale-95",
+                    togglingId === stream.id && "opacity-50 cursor-not-allowed",
                     stream.status === 'live' 
                       ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100" 
                       : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-200 dark:shadow-none"
                   )}
                 >
-                  {stream.status === 'live' ? <><Square size={16} /> Stop Stream</> : <><Play size={16} /> Start Stream</>}
+                  {togglingId === stream.id ? (
+                    <><RefreshCw size={16} className="animate-spin" /> {stream.status === 'live' ? 'Stopping...' : 'Starting...'}</>
+                  ) : (
+                    stream.status === 'live' ? <><Square size={16} /> Stop Stream</> : <><Play size={16} /> Start Stream</>
+                  )}
                 </button>
               </div>
             </div>
