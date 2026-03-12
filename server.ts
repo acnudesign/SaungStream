@@ -20,6 +20,7 @@ import { GoogleGenAI } from "@google/genai";
 import axios from "axios";
 import { File as MegaFile } from "megajs";
 import Busboy from "busboy";
+import cors from "cors";
 
 const execAsync = promisify(exec);
 
@@ -37,9 +38,10 @@ const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 const THUMBNAILS_DIR = path.join(process.cwd(), "thumbnails");
 const PROFILES_DIR = path.join(process.cwd(), "profiles");
 const DATA_DIR = path.join(process.cwd(), "data");
+const CHUNKS_DIR = path.join(process.cwd(), "chunks");
 
 console.log(`Initializing directories in: ${process.cwd()}`);
-[UPLOADS_DIR, THUMBNAILS_DIR, PROFILES_DIR, DATA_DIR].forEach(dir => {
+[UPLOADS_DIR, THUMBNAILS_DIR, PROFILES_DIR, DATA_DIR, CHUNKS_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     console.log(`Created directory: ${dir}`);
@@ -376,6 +378,29 @@ if (!adminUser) {
 
 const app = express();
 app.set('trust proxy', 1);
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    
+    const allowedPatterns = [
+      /saungstream\.my\.id$/,
+      /localhost/,
+      /127\.0\.0\.1/,
+      /\.run\.app$/ // Allow AI Studio preview
+    ];
+
+    const isAllowed = allowedPatterns.some(pattern => pattern.test(origin));
+
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      console.log('CORS Blocked Origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '10gb' }));
 app.use(express.urlencoded({ extended: true, limit: '10gb' }));
 app.use(session({
@@ -1248,6 +1273,78 @@ app.post("/api/logout", (req, res) => {
   req.session.destroy(() => {
     res.json({ success: true });
   });
+});
+
+// --- CHUNKED UPLOAD ENDPOINTS ---
+app.post("/api/upload-chunk", requireAuth, (req, res) => {
+  const { chunkIndex, totalChunks, fileId } = req.query;
+  const chunkDir = path.join(CHUNKS_DIR, fileId as string);
+  
+  if (!fs.existsSync(chunkDir)) {
+    fs.mkdirSync(chunkDir, { recursive: true });
+  }
+
+  const chunkPath = path.join(chunkDir, chunkIndex as string);
+  const writeStream = fs.createWriteStream(chunkPath);
+  
+  req.pipe(writeStream);
+
+  writeStream.on("finish", () => {
+    res.json({ success: true, message: `Chunk ${chunkIndex} uploaded` });
+  });
+
+  writeStream.on("error", (err) => {
+    console.error("Chunk upload error:", err);
+    res.status(500).json({ success: false, message: "Chunk upload failed" });
+  });
+});
+
+app.post("/api/merge-chunks", requireAuth, async (req, res) => {
+  const { fileName, fileId, totalChunks } = req.body;
+  const chunkDir = path.join(CHUNKS_DIR, fileId);
+  const finalPath = path.join(UPLOADS_DIR, fileName);
+  
+  try {
+    const writeStream = fs.createWriteStream(finalPath);
+    
+    for (let i = 0; i < (totalChunks as unknown as number); i++) {
+      const chunkPath = path.join(chunkDir, i.toString());
+      if (fs.existsSync(chunkPath)) {
+        const chunkBuffer = fs.readFileSync(chunkPath);
+        writeStream.write(chunkBuffer);
+        fs.unlinkSync(chunkPath); // Delete chunk after merging
+      }
+    }
+    
+    writeStream.end();
+    
+    writeStream.on("finish", async () => {
+      if (fs.existsSync(chunkDir)) {
+        try {
+          fs.rmdirSync(chunkDir); // Delete chunk directory
+        } catch (e) {}
+      }
+
+      // Get file size
+      const stats = fs.statSync(finalPath);
+      const size = stats.size;
+
+      // Add to database
+      const mediaId = (db.prepare(
+        "INSERT INTO media (user_id, filename, filepath, size, status) VALUES (?, ?, ?, ?, ?)"
+      ).run(req.session.user!.id, fileName, finalPath, size, "ready") as any).lastInsertRowid;
+
+      res.json({ 
+        success: true, 
+        mediaId,
+        url: `/uploads/${fileName}`,
+        message: "File uploaded and merged successfully" 
+      });
+    });
+  } catch (error) {
+    console.error("Merge error:", error);
+    res.status(500).json({ error: "Failed to merge file chunks" });
+  }
 });
 
 app.get("/api/me", (req, res) => {
