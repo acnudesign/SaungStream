@@ -1747,7 +1747,8 @@ const Streams = () => {
     youtube_comments_mode: "on",
     youtube_who_can_comment: "anyone",
     youtube_sort_by: "top",
-    network_optimization: true
+    network_optimization: true,
+    force_encoding: true
   });
 
   const [aiKeywords, setAiKeywords] = useState("");
@@ -1855,7 +1856,8 @@ const Streams = () => {
       youtube_comments_mode: formData.youtube_comments_mode,
       youtube_who_can_comment: formData.youtube_who_can_comment,
       youtube_sort_by: formData.youtube_sort_by,
-      network_optimization: formData.network_optimization ? 1 : 0
+      network_optimization: formData.network_optimization ? 1 : 0,
+      force_encoding: formData.force_encoding ? 1 : 0
     };
     
     try {
@@ -1949,7 +1951,8 @@ const Streams = () => {
       youtube_comments_mode: stream.youtube_comments_mode || "on",
       youtube_who_can_comment: stream.youtube_who_can_comment || "anyone",
       youtube_sort_by: stream.youtube_sort_by || "top",
-      network_optimization: stream.network_optimization === 1
+      network_optimization: stream.network_optimization === 1,
+      force_encoding: stream.force_encoding === 1
     });
     setIsCreating(true);
   };
@@ -2024,7 +2027,9 @@ const Streams = () => {
               youtube_category: "24",
               youtube_comments_mode: "on",
               youtube_who_can_comment: "anyone",
-              youtube_sort_by: "top"
+              youtube_sort_by: "top",
+              network_optimization: true,
+              force_encoding: true
             }); 
           }}
           className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all"
@@ -2529,6 +2534,22 @@ const Streams = () => {
                     <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
                   </label>
                 </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800 dark:text-white">Force Re-encoding</h4>
+                    <p className="text-[10px] text-slate-500">Always re-encode video to ensure maximum compatibility and stability. Recommended for YouTube.</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={formData.force_encoding}
+                      onChange={e => setFormData({...formData, force_encoding: e.target.checked})}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -2550,6 +2571,36 @@ const Streams = () => {
           </form>
         </motion.div>
       )}
+
+      {/* Streaming Tips Section */}
+      <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-2xl p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-amber-100 dark:bg-amber-800 rounded-lg text-amber-600 dark:text-amber-400">
+            <Info size={20} />
+          </div>
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white">Streaming Tips & Stability</h3>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-3">
+            <h4 className="font-bold text-amber-800 dark:text-amber-300 text-sm">YouTube Latency Settings</h4>
+            <ul className="text-xs text-slate-600 dark:text-slate-400 space-y-2 list-disc pl-4">
+              <li><span className="font-bold">Normal Latency:</span> Best for stability and high quality. Recommended if you experience buffering.</li>
+              <li><span className="font-bold">Low Latency:</span> Good balance for near real-time interaction.</li>
+              <li><span className="font-bold">Ultra-Low Latency:</span> Real-time interaction but very prone to buffering if network fluctuates.</li>
+            </ul>
+          </div>
+          
+          <div className="space-y-3">
+            <h4 className="font-bold text-amber-800 dark:text-amber-300 text-sm">Optimization Guide</h4>
+            <ul className="text-xs text-slate-600 dark:text-slate-400 space-y-2 list-disc pl-4">
+              <li>Always enable <span className="font-bold">Force Re-encoding</span> for playlists to ensure smooth transitions.</li>
+              <li>Use <span className="font-bold">Network Optimization</span> to reduce CPU load and prevent frame drops.</li>
+              <li>For 1080p, a bitrate of <span className="font-bold">6000-8000kbps</span> is ideal for YouTube.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 gap-6">
         {streams.map((stream: any) => (
