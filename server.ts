@@ -292,7 +292,7 @@ const migrate = () => {
       if (!columns.includes("youtube_recording_date")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_recording_date TEXT").run();
       if (!columns.includes("youtube_recording_location")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_recording_location TEXT").run();
       if (!columns.includes("youtube_license")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_license TEXT DEFAULT 'youtube'").run();
-      if (!columns.includes("youtube_allow_embedding")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_allow_embedding INTEGER DEFAULT 1").run();
+      if (!columns.includes("youtube_allow_embedding")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_allow_embedding INTEGER DEFAULT 0").run();
       if (!columns.includes("youtube_publish_to_subscriptions")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_publish_to_subscriptions INTEGER DEFAULT 1").run();
       if (!columns.includes("youtube_shorts_remixing")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_shorts_remixing TEXT DEFAULT 'allow_video_audio'").run();
       if (!columns.includes("youtube_category")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_category TEXT DEFAULT '24'").run(); // 24 is Entertainment
@@ -590,7 +590,7 @@ class StreamManager {
   private activeStreams: Map<number, ChildProcess> = new Map();
 
   async startStream(streamId: number) {
-    if (this.activeStreams.has(streamId)) return;
+    if (this.activeStreams.has(streamId)) return { success: false, error: "Stream already active" };
 
     const stream = db.prepare(`
       SELECT s.*, p.loop as playlist_loop 
@@ -598,7 +598,7 @@ class StreamManager {
       LEFT JOIN playlists p ON s.playlist_id = p.id 
       WHERE s.id = ?
     `).get(streamId) as any;
-    if (!stream) return;
+    if (!stream) return { success: false, error: "Stream not found" };
 
     // Automate YouTube if channel is selected
     if (stream.platform === 'youtube' && stream.youtube_channel_id && !stream.rtmp_url) {
@@ -612,15 +612,16 @@ class StreamManager {
         // Give YouTube a moment to prepare the ingestion server
         console.log("Waiting 3 seconds for YouTube ingestion server to be ready...");
         await new Promise(resolve => setTimeout(resolve, 3000));
-      } catch (err) {
-        this.log(stream.user_id, "error", `Failed to automate YouTube for ${stream.name}: ${err}`);
-        return;
+      } catch (err: any) {
+        const errMsg = err.response?.data?.error?.message || err.message || String(err);
+        this.log(stream.user_id, "error", `Failed to automate YouTube for ${stream.name}: ${errMsg}`);
+        return { success: false, error: `YouTube Error: ${errMsg}` };
       }
     }
 
     if (!stream.rtmp_url || !stream.stream_key) {
       this.log(stream.user_id, "error", `Stream ${stream.name} is missing RTMP URL or Stream Key.`);
-      return;
+      return { success: false, error: "Missing RTMP URL or Stream Key" };
     }
 
     let inputArgs: string[] = [];
@@ -769,6 +770,8 @@ class StreamManager {
         }
       }
     });
+
+    return { success: true };
   }
 
   stopStream(streamId: number) {
@@ -1153,26 +1156,56 @@ async function createYouTubeBroadcast(streamId: number) {
     console.log(`Creating YouTube Broadcast: ${title} at ${scheduledTime} with ${youtubeResolution}`);
 
     // 1. Create Broadcast
-    const broadcastRes = await youtube.liveBroadcasts.insert({
-      part: ["snippet", "status", "contentDetails"],
-      requestBody: {
-        snippet: {
-          title: title,
-          scheduledStartTime: scheduledTime,
-          description: description
-        },
-        status: {
-          privacyStatus: "public",
-          selfDeclaredMadeForKids: stream.youtube_made_for_kids === 1
-        },
-        contentDetails: {
-          enableAutoStart: true,
-          enableAutoStop: true,
-          enableEmbed: stream.youtube_allow_embedding === 1,
-          monitorStream: { enableMonitorStream: false } // Disable monitor to reduce latency and issues
+    let broadcastRes;
+    try {
+      broadcastRes = await youtube.liveBroadcasts.insert({
+        part: ["snippet", "status", "contentDetails"],
+        requestBody: {
+          snippet: {
+            title: title,
+            scheduledStartTime: scheduledTime,
+            description: description
+          },
+          status: {
+            privacyStatus: "public",
+            selfDeclaredMadeForKids: stream.youtube_made_for_kids === 1
+          },
+          contentDetails: {
+            enableAutoStart: true,
+            enableAutoStop: true,
+            enableEmbed: stream.youtube_allow_embedding === 1,
+            monitorStream: { enableMonitorStream: false }
+          }
         }
+      });
+    } catch (err: any) {
+      // If embedding is not allowed, try again without it
+      if (err.message && err.message.includes("Embed setting was invalid")) {
+        console.log("YouTube embedding not allowed for this account, retrying without it...");
+        broadcastRes = await youtube.liveBroadcasts.insert({
+          part: ["snippet", "status", "contentDetails"],
+          requestBody: {
+            snippet: {
+              title: title,
+              scheduledStartTime: scheduledTime,
+              description: description
+            },
+            status: {
+              privacyStatus: "public",
+              selfDeclaredMadeForKids: stream.youtube_made_for_kids === 1
+            },
+            contentDetails: {
+              enableAutoStart: true,
+              enableAutoStop: true,
+              enableEmbed: false,
+              monitorStream: { enableMonitorStream: false }
+            }
+          }
+        });
+      } else {
+        throw err;
       }
-    });
+    }
 
     const broadcastId = broadcastRes.data.id;
 
@@ -1275,8 +1308,9 @@ async function createYouTubeBroadcast(streamId: number) {
     console.log(`YouTube Broadcast bound: ${broadcastId} with stream ${youtubeStreamId}`);
 
     return { rtmpUrl, streamKey };
-  } catch (err) {
-    console.error("Failed to automate YouTube broadcast:", err);
+  } catch (err: any) {
+    const detailedError = err.response?.data?.error || err;
+    console.error("Failed to automate YouTube broadcast:", JSON.stringify(detailedError, null, 2));
     throw err;
   }
 }
@@ -1910,7 +1944,7 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
   }
 });
 
-app.post("/api/streams/:id/start", requireAuth, (req, res) => {
+app.post("/api/streams/:id/start", requireAuth, async (req, res) => {
   const stream = db.prepare("SELECT name, start_time, start_date FROM streams WHERE id = ? AND user_id = ?").get(req.params.id, req.session.user.id) as any;
   if (!stream) return res.status(404).json({ error: "Stream not found" });
   
@@ -1933,9 +1967,18 @@ app.post("/api/streams/:id/start", requireAuth, (req, res) => {
   const triggerKey = `${dateParts.year}-${dateParts.month}-${dateParts.day} ${dateParts.hour}:${dateParts.minute}`;
   db.prepare("UPDATE streams SET last_triggered = ? WHERE id = ?").run(triggerKey, req.params.id);
 
-  streamManager.startStream(Number(req.params.id));
-  logAction(req.session.user.id, req.session.user.username, "Stream Started", `Started stream: ${stream.name}`);
-  res.json({ success: true });
+  try {
+    const result = await streamManager.startStream(Number(req.params.id));
+    if (result && !result.success) {
+      return res.status(500).json({ error: result.error });
+    }
+    
+    logAction(req.session.user.id, req.session.user.username, "Stream Started", `Started stream: ${stream.name}`);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error(`Manual start failed for stream ${req.params.id}:`, err);
+    res.status(500).json({ error: err.message || "Failed to start stream" });
+  }
 });
 
 app.post("/api/streams/:id/stop", requireAuth, (req, res) => {
@@ -2476,11 +2519,6 @@ setInterval(() => {
   
   const now = new Date();
   
-  // Watchdog log every 10 minutes to confirm scheduler is alive
-  if (now.getMinutes() % 10 === 0 && now.getSeconds() < 10) {
-    console.log(`Scheduler Watchdog: Running at ${now.toISOString()}`);
-  }
-  
   // Get time in the specified timezone
   let currentTime: string;
   let currentDate: string;
@@ -2513,6 +2551,11 @@ setInterval(() => {
     currentDate = now.toISOString().slice(0, 10);
     currentDay = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][now.getDay()];
     currentDayOfMonth = now.getDate();
+  }
+
+  // Watchdog log every 10 minutes to confirm scheduler is alive
+  if (now.getMinutes() % 10 === 0 && now.getSeconds() < 10) {
+    console.log(`Scheduler Watchdog: Running at ${now.toISOString()}, TZ: ${tz}, Local: ${currentDate} ${currentTime} (${currentDay})`);
   }
 
   // 1. Check for streams to start
