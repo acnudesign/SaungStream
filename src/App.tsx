@@ -1746,7 +1746,8 @@ const Streams = () => {
     youtube_category: "24",
     youtube_comments_mode: "on",
     youtube_who_can_comment: "anyone",
-    youtube_sort_by: "top"
+    youtube_sort_by: "top",
+    network_optimization: true
   });
 
   const [aiKeywords, setAiKeywords] = useState("");
@@ -1853,7 +1854,8 @@ const Streams = () => {
       youtube_category: formData.youtube_category,
       youtube_comments_mode: formData.youtube_comments_mode,
       youtube_who_can_comment: formData.youtube_who_can_comment,
-      youtube_sort_by: formData.youtube_sort_by
+      youtube_sort_by: formData.youtube_sort_by,
+      network_optimization: formData.network_optimization ? 1 : 0
     };
     
     try {
@@ -1946,7 +1948,8 @@ const Streams = () => {
       youtube_category: stream.youtube_category || "24",
       youtube_comments_mode: stream.youtube_comments_mode || "on",
       youtube_who_can_comment: stream.youtube_who_can_comment || "anyone",
-      youtube_sort_by: stream.youtube_sort_by || "top"
+      youtube_sort_by: stream.youtube_sort_by || "top",
+      network_optimization: stream.network_optimization === 1
     });
     setIsCreating(true);
   };
@@ -2509,6 +2512,24 @@ const Streams = () => {
                   </div>
                 </div>
               )}
+
+              <div className="p-6 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800 dark:text-white">Network Optimization</h4>
+                    <p className="text-[10px] text-slate-500">Use ultrafast encoding and zero-latency tuning to prevent buffering.</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={formData.network_optimization}
+                      onChange={e => setFormData({...formData, network_optimization: e.target.checked})}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+              </div>
             </div>
 
             <div className="flex justify-end gap-4 pt-4">
