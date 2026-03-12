@@ -21,6 +21,8 @@ import axios from "axios";
 import { File as MegaFile } from "megajs";
 import Busboy from "busboy";
 import cors from "cors";
+import { Server as SocketServer } from "socket.io";
+import http from "http";
 
 const execAsync = promisify(exec);
 
@@ -2255,7 +2257,7 @@ app.get("/api/system/time", requireAuth, (req, res) => {
 });
 
 app.post("/api/system/settings", requireAuth, requireAdmin, (req, res) => {
-  const { timezone, theme_mode, gemini_api_key } = req.body;
+  const { timezone, theme_mode, gemini_api_key, github_token } = req.body;
   console.log(`Updating system settings: timezone=${timezone}, theme_mode=${theme_mode}`);
   
   if (timezone) {
@@ -2269,6 +2271,7 @@ app.post("/api/system/settings", requireAuth, requireAdmin, (req, res) => {
   }
   if (theme_mode) db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('theme_mode', ?)").run(theme_mode);
   if (gemini_api_key !== undefined) db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('gemini_api_key', ?)").run(gemini_api_key);
+  if (github_token !== undefined) db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('github_token', ?)").run(github_token);
   
   res.json({ success: true });
 });
@@ -2384,6 +2387,12 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
     try {
       console.log("Starting background system update from GitHub...");
       
+      // Get GitHub token if available
+      const githubToken = db.prepare("SELECT value FROM settings WHERE key = 'github_token'").get() as any;
+      const repoUrl = githubToken && githubToken.value 
+        ? `https://${githubToken.value}@github.com/acnudesign/SaungStream.git`
+        : "https://github.com/acnudesign/SaungStream.git";
+
       // 1. Check if git is initialized and ensure remote is correct
       try {
         await execAsync("git rev-parse --is-inside-work-tree");
@@ -2396,10 +2405,10 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
       }
 
       try {
-        await execAsync("git remote set-url origin https://github.com/acnudesign/SaungStream.git");
+        await execAsync(`git remote set-url origin ${repoUrl}`);
       } catch (e) {
         try {
-          await execAsync("git remote add origin https://github.com/acnudesign/SaungStream.git");
+          await execAsync(`git remote add origin ${repoUrl}`);
         } catch (re) {}
       }
 
@@ -2407,15 +2416,33 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
       console.log("Fetching latest from GitHub...");
       await execAsync("git fetch origin main");
 
-      // 3. Close database connections to release file locks
-      console.log("Closing database connections before reset...");
+      // 3. Reset to force update
+      console.log("Resetting local state to match GitHub...");
+      try {
+        await execAsync("git checkout -B main origin/main");
+      } catch (e) {
+        await execAsync("git reset --hard origin/main");
+      }
+
+      console.log("Update successful, broadcasting refresh signal...");
+      // Broadcast to all clients to refresh
+      const io = (app as any).io;
+      if (io) {
+        io.emit('system:update_available', { 
+          message: 'Aplikasi telah diperbarui ke versi terbaru. Memuat ulang...',
+          version: new Date().getTime() 
+        });
+      }
+
+      // 4. Close database connections to release file locks
+      console.log("Closing database connections before restart...");
       try {
         db.close();
       } catch (e) {
         console.error("Error closing main DB:", e);
       }
 
-      // 4. Try to rename root files to avoid git unlink errors
+      // 5. Try to rename root files to avoid git unlink errors
       const rootFiles = ["saungstream.db", "sessions.db", "saungstream.db-shm", "saungstream.db-wal"];
       rootFiles.forEach(file => {
         const p = path.join(process.cwd(), file);
@@ -2429,19 +2456,6 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
         }
       });
 
-      // 5. Force remove DB files from Git index if they are tracked
-      try {
-        await execAsync("git rm --cached saungstream.db sessions.db saungstream.db-shm saungstream.db-wal");
-      } catch (e) {}
-
-      // 6. Reset to force update
-      console.log("Resetting local state to match GitHub...");
-      try {
-        await execAsync("git checkout -B main origin/main");
-      } catch (e) {
-        await execAsync("git reset --hard origin/main");
-      }
-      
       console.log("Update completed successfully. Restarting...");
       process.exit(0);
 
@@ -2806,7 +2820,22 @@ async function startServer() {
   }
 
   const PORT = 3000;
-  const server = app.listen(PORT, "0.0.0.0", async () => {
+  const httpServer = http.createServer(app);
+  const io = new SocketServer(httpServer, {
+    cors: {
+      origin: "*",
+      methods: ["GET", "POST"]
+    }
+  });
+
+  // Make io available globally or pass it to routes
+  (app as any).io = io;
+
+  io.on("connection", (socket) => {
+    console.log("Client connected to socket:", socket.id);
+  });
+
+  const server = httpServer.listen(PORT, "0.0.0.0", async () => {
     console.log(`SaungStream running on http://localhost:${PORT}`);
     
     // Auto-resume live streams and pending encodings on startup
