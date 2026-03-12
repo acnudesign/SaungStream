@@ -1172,6 +1172,7 @@ const Dashboard = () => {
 const MediaLibrary = () => {
   const [media, setMedia] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [isMerging, setIsMerging] = useState(false);
   const [previewMedia, setPreviewMedia] = useState<any>(null);
   const [storage, setStorage] = useState<any>({ used: 0, limit: 10 * 1024 * 1024 * 1024, percentage: 0 });
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -1194,6 +1195,7 @@ const MediaLibrary = () => {
     if (!file) return;
 
     setUploading(true);
+    setIsMerging(false);
     setUploadProgress(0);
 
     const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB per chunk
@@ -1232,6 +1234,7 @@ const MediaLibrary = () => {
       }
 
       // All chunks uploaded, now merge
+      setIsMerging(true);
       const mergeUrl = window.location.hostname === 'saungstream.my.id'
         ? `${window.location.protocol}//unggah.saungstream.my.id/api/merge-chunks`
         : '/api/merge-chunks';
@@ -1244,16 +1247,26 @@ const MediaLibrary = () => {
 
       if (mergeRes.ok) {
         fetchMedia();
+        setIsMerging(false);
+        setUploading(false);
         alert("Upload successful!");
       } else {
-        const data = await mergeRes.json();
-        alert(data.error || "Merge failed");
+        const text = await mergeRes.text();
+        let errorMessage = "Merge failed";
+        try {
+          const data = JSON.parse(text);
+          errorMessage = data.error || errorMessage;
+        } catch (e) {
+          errorMessage = "Server error during merge. Please check VPS logs.";
+        }
+        alert(errorMessage);
       }
     } catch (err: any) {
       console.error("Upload error:", err);
       alert(err.message || "Upload failed");
     } finally {
       setUploading(false);
+      setIsMerging(false);
       setUploadProgress(0);
     }
   };
@@ -1337,8 +1350,12 @@ const MediaLibrary = () => {
                 />
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-indigo-600 dark:text-indigo-400 font-black text-2xl">{uploadProgress}%</span>
-                <span className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">Sabar sejenak, sedang mengunggah...</span>
+                <span className="text-indigo-600 dark:text-indigo-400 font-black text-2xl">
+                  {isMerging ? "100%" : `${uploadProgress}%`}
+                </span>
+                <span className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest">
+                  {isMerging ? "Sedang menggabungkan file... Sabar ya!" : "Sabar sejenak, sedang mengunggah..."}
+                </span>
               </div>
             </div>
           </motion.div>
