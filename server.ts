@@ -299,6 +299,7 @@ const migrate = () => {
       if (!columns.includes("youtube_comments_mode")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_comments_mode TEXT DEFAULT 'on'").run();
       if (!columns.includes("youtube_who_can_comment")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_who_can_comment TEXT DEFAULT 'anyone'").run();
       if (!columns.includes("youtube_sort_by")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_sort_by TEXT DEFAULT 'top'").run();
+      if (!columns.includes("force_encoding")) db.prepare("ALTER TABLE streams ADD COLUMN force_encoding INTEGER DEFAULT 1").run();
     }
 
     if (table === "metadata_slots") {
@@ -610,8 +611,8 @@ class StreamManager {
         Object.assign(stream, updatedStream);
         
         // Give YouTube a moment to prepare the ingestion server
-        console.log("Waiting 3 seconds for YouTube ingestion server to be ready...");
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        console.log("Waiting 7 seconds for YouTube ingestion server to be ready...");
+        await new Promise(resolve => setTimeout(resolve, 7000));
       } catch (err: any) {
         const errMsg = err.response?.data?.error?.message || err.message || String(err);
         this.log(stream.user_id, "error", `Failed to automate YouTube for ${stream.name}: ${errMsg}`);
@@ -637,7 +638,7 @@ class StreamManager {
       if (stream.loop) loopFlag = ["-stream_loop", "-1"];
       inputArgs = ["-i", video.filepath];
 
-      if (video.is_pre_encoded) {
+      if (video.is_pre_encoded && !stream.force_encoding) {
         codecArgs = ["-c", "copy"];
       } else {
         const [width, height] = (stream.resolution || "1280x720").split("x");
@@ -649,11 +650,13 @@ class StreamManager {
           "-tune", useOptimization ? "zerolatency" : "main",
           "-b:v", `${stream.bitrate}k`,
           "-maxrate", `${stream.bitrate}k`,
+          "-minrate", `${stream.bitrate}k`,
           "-bufsize", `${stream.bitrate * 2}k`,
           "-pix_fmt", "yuv420p",
           "-g", "60",
           "-keyint_min", "60",
           "-sc_threshold", "0",
+          "-r", "30",
           "-c:a", "aac",
           "-b:a", "128k",
           "-ar", "44100"
@@ -682,7 +685,7 @@ class StreamManager {
 
       // For playlists, we usually re-encode to ensure transitions are smooth unless all items are identical in format
       const allPreEncoded = playlistItems.every(item => item.is_pre_encoded);
-      if (allPreEncoded) {
+      if (allPreEncoded && !stream.force_encoding) {
         codecArgs = ["-c", "copy"];
       } else {
         const [width, height] = (stream.resolution || "1280x720").split("x");
@@ -694,11 +697,13 @@ class StreamManager {
           "-tune", useOptimization ? "zerolatency" : "main",
           "-b:v", `${stream.bitrate}k`,
           "-maxrate", `${stream.bitrate}k`,
+          "-minrate", `${stream.bitrate}k`,
           "-bufsize", `${stream.bitrate * 2}k`,
           "-pix_fmt", "yuv420p",
           "-g", "60",
           "-keyint_min", "60",
           "-sc_threshold", "0",
+          "-r", "30",
           "-c:a", "aac",
           "-b:a", "128k",
           "-ar", "44100"
@@ -752,8 +757,15 @@ class StreamManager {
       const currentStream = db.prepare("SELECT * FROM streams WHERE id = ?").get(streamId) as any;
       
       if (currentStream && currentStream.status === 'live') {
-        const lastError = errorOutput.split("\n").filter(l => l.toLowerCase().includes("error")).slice(-3).join(" | ");
-        this.log(stream.user_id, "error", `Stream ${stream.name} stopped unexpectedly (code ${code}). ${lastError ? 'Last errors: ' + lastError : ''} Restarting in 10s...`);
+        const lastError = errorOutput.split("\n")
+          .filter(l => l.toLowerCase().includes("error") || l.toLowerCase().includes("failed") || l.toLowerCase().includes("fatal"))
+          .slice(-5)
+          .join(" | ");
+        
+        const restartMsg = `Stream ${stream.name} stopped unexpectedly (code ${code}). ${lastError ? 'Reason: ' + lastError : 'No specific error captured.'} Restarting in 10s...`;
+        this.log(stream.user_id, "error", restartMsg);
+        console.error(restartMsg);
+        
         setTimeout(() => this.startStream(streamId), 10000);
       } else {
         db.prepare("UPDATE streams SET status = 'idle', started_at = NULL WHERE id = ?").run(streamId);
@@ -889,6 +901,23 @@ class StreamManager {
 
   isLive(streamId: number) {
     return this.activeStreams.has(streamId);
+  }
+
+  async resumeLiveStreams() {
+    try {
+      const liveStreams = db.prepare("SELECT id, name FROM streams WHERE status = 'live'").all() as any[];
+      if (liveStreams.length > 0) {
+        console.log(`[Auto-Resume] Found ${liveStreams.length} streams to resume...`);
+        for (const s of liveStreams) {
+          console.log(`[Auto-Resume] Resuming stream: ${s.name} (ID: ${s.id})`);
+          // Small delay between starts to avoid CPU spike and allow system to stabilize
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          this.startStream(s.id);
+        }
+      }
+    } catch (err) {
+      console.error("[Auto-Resume] Error during resume:", err);
+    }
   }
 }
 
@@ -1034,52 +1063,102 @@ app.delete("/api/youtube/channels/:id", requireAuth, (req, res) => {
 });
 
 // --- Pre-encoding Pipeline ---
-const encodeVideo = async (mediaId: number) => {
-  const media = db.prepare("SELECT * FROM media WHERE id = ?").get(mediaId) as any;
-  if (!media) return;
+const encodeVideo = (mediaId: number): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    const media = db.prepare("SELECT * FROM media WHERE id = ?").get(mediaId) as any;
+    if (!media) return resolve();
 
-  const inputPath = media.filepath;
-  const outputPath = path.join(UPLOADS_DIR, `encoded_${media.filename}`);
+    const inputPath = media.filepath;
+    const outputPath = path.join(UPLOADS_DIR, `encoded_${media.filename}`);
 
-  db.prepare("UPDATE media SET status = 'processing' WHERE id = ?").run(mediaId);
+    db.prepare("UPDATE media SET status = 'processing' WHERE id = ?").run(mediaId);
 
-  ffmpeg(inputPath)
-    .outputOptions([
-      "-c:v libx264",
-      "-preset fast",
-      "-b:v 4000k",
-      "-maxrate 4000k",
-      "-bufsize 8000k",
-      "-pix_fmt yuv420p",
-      "-g 60",
-      "-c:a aac",
-      "-b:a 128k",
-      "-ar 44100",
-      "-movflags +faststart"
-    ])
-    .on("start", (commandLine) => {
-      console.log("Spawned FFmpeg with command: " + commandLine);
-    })
-    .on("error", (err) => {
-      console.error("Encoding error:", err);
-      db.prepare("UPDATE media SET status = 'failed' WHERE id = ?").run(mediaId);
-    })
-    .on("end", () => {
-      console.log("Encoding finished!");
-      // Replace original file with encoded one or keep both? 
-      // User wants "normalized to a streaming-ready format".
-      // I'll replace it to save space and ensure consistency.
-      try {
-        fs.unlinkSync(inputPath);
-        fs.renameSync(outputPath, inputPath);
-        db.prepare("UPDATE media SET status = 'ready', is_pre_encoded = 1 WHERE id = ?").run(mediaId);
-      } catch (e) {
-        console.error("Failed to swap encoded file:", e);
+    ffmpeg(inputPath)
+      .outputOptions([
+        "-c:v libx264",
+        "-preset fast",
+        "-b:v 4000k",
+        "-maxrate 4000k",
+        "-bufsize 8000k",
+        "-pix_fmt yuv420p",
+        "-g 60",
+        "-c:a aac",
+        "-b:a 128k",
+        "-ar 44100",
+        "-movflags +faststart"
+      ])
+      .on("start", (commandLine) => {
+        console.log("Spawned FFmpeg with command: " + commandLine);
+      })
+      .on("error", (err) => {
+        console.error("Encoding error:", err);
         db.prepare("UPDATE media SET status = 'failed' WHERE id = ?").run(mediaId);
-      }
-    })
-    .save(outputPath);
+        resolve(); // Resolve even on error to continue queue
+      })
+      .on("end", () => {
+        console.log("Encoding finished!");
+        try {
+          fs.unlinkSync(inputPath);
+          fs.renameSync(outputPath, inputPath);
+          db.prepare("UPDATE media SET status = 'ready', is_pre_encoded = 1 WHERE id = ?").run(mediaId);
+        } catch (e) {
+          console.error("Failed to swap encoded file:", e);
+          db.prepare("UPDATE media SET status = 'failed' WHERE id = ?").run(mediaId);
+        }
+        resolve();
+      })
+      .save(outputPath);
+  });
 };
+
+class EncodingQueue {
+  private queue: number[] = [];
+  private isProcessing: boolean = false;
+
+  add(mediaId: number) {
+    // Check if already in queue or processing
+    const media = db.prepare("SELECT status FROM media WHERE id = ?").get(mediaId) as any;
+    if (media && (media.status === 'queued' || media.status === 'processing')) {
+      return;
+    }
+
+    this.queue.push(mediaId);
+    db.prepare("UPDATE media SET status = 'queued' WHERE id = ?").run(mediaId);
+    this.process();
+  }
+
+  private async process() {
+    if (this.isProcessing || this.queue.length === 0) return;
+    this.isProcessing = true;
+
+    const mediaId = this.queue.shift();
+    if (mediaId) {
+      console.log(`[EncodingQueue] Processing media ID: ${mediaId}. Remaining in queue: ${this.queue.length}`);
+      try {
+        await encodeVideo(mediaId);
+      } catch (err) {
+        console.error(`[EncodingQueue] Error processing media ${mediaId}:`, err);
+      }
+    }
+
+    this.isProcessing = false;
+    // Use setImmediate to avoid stack overflow and allow other tasks to run
+    setImmediate(() => this.process());
+  }
+
+  // Resume any pending tasks on startup
+  resumePending() {
+    const pending = db.prepare("SELECT id FROM media WHERE status IN ('queued', 'processing')").all() as any[];
+    if (pending.length > 0) {
+      console.log(`[EncodingQueue] Resuming ${pending.length} pending encoding tasks...`);
+      for (const item of pending) {
+        this.add(item.id);
+      }
+    }
+  }
+}
+
+const encodingQueue = new EncodingQueue();
 
 // --- YouTube Automation Helper ---
 async function getYouTubeClient(channelId: number) {
@@ -1438,17 +1517,61 @@ app.post("/api/merge-chunks", requireAuth, async (req, res) => {
     const stats = fs.statSync(finalPath);
     const size = stats.size;
 
-    // Add to database
-    const mediaId = (db.prepare(
-      "INSERT INTO media (user_id, filename, filepath, size, status) VALUES (?, ?, ?, ?, ?)"
-    ).run(req.session.user!.id, fileName, finalPath, size, "ready") as any).lastInsertRowid;
+    // Generate thumbnail and get duration
+    const thumbnailName = fileName + ".jpg";
+    
+    ffmpeg(finalPath)
+      .screenshots({
+        timestamps: ["00:00:01"],
+        filename: thumbnailName,
+        folder: THUMBNAILS_DIR,
+        size: "320x180"
+      })
+      .on("end", () => {
+        ffmpeg.ffprobe(finalPath, (err, metadata) => {
+          const duration = metadata?.format?.duration || 0;
+          
+          // Add to database
+          const result = db.prepare(
+            "INSERT INTO media (user_id, filename, filepath, duration, thumbnail_path, size, status) VALUES (?, ?, ?, ?, ?, ?, ?)"
+          ).run(req.session.user!.id, fileName, finalPath, Math.round(duration), thumbnailName, size, "ready");
 
-    res.json({ 
-      success: true, 
-      mediaId,
-      url: `/uploads/${fileName}`,
-      message: "File uploaded and merged successfully" 
-    });
+          const mediaId = Number(result.lastInsertRowid);
+          
+          logAction(req.session.user!.id, req.session.user!.username, "Media Uploaded (Chunked)", `Uploaded ${fileName} (${(size / 1024 / 1024).toFixed(2)} MB)`);
+          
+          // Add to encoding queue
+          encodingQueue.add(mediaId);
+
+          if (!res.headersSent) {
+            res.json({ 
+              success: true, 
+              mediaId,
+              url: `/uploads/${fileName}`,
+              message: "File uploaded and merged successfully" 
+            });
+          }
+        });
+      })
+      .on("error", (err) => {
+        console.error("FFmpeg error during merge processing:", err);
+        // Still add to DB even if thumbnail fails, but with error status or no thumbnail
+        const result = db.prepare(
+          "INSERT INTO media (user_id, filename, filepath, size, status) VALUES (?, ?, ?, ?, ?)"
+        ).run(req.session.user!.id, fileName, finalPath, size, "ready");
+        
+        const mediaId = Number(result.lastInsertRowid);
+        encodingQueue.add(mediaId);
+
+        if (!res.headersSent) {
+          res.json({ 
+            success: true, 
+            mediaId,
+            url: `/uploads/${fileName}`,
+            message: "File uploaded but thumbnail generation failed" 
+          });
+        }
+      });
 
   } catch (error) {
     console.error("Merge error:", error);
@@ -1563,7 +1686,7 @@ app.post("/api/media/upload", requireAuth, (req, res) => {
               .run(userId, filename, filepath, Math.round(duration), thumbnailName, fileSize, 'ready');
             logAction(userId, req.session.user.username, "Media Uploaded", `Uploaded ${filename} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
             
-            encodeVideo(Number(result.lastInsertRowid));
+            encodingQueue.add(Number(result.lastInsertRowid));
             res.json({ success: true });
           });
         })
@@ -1754,7 +1877,7 @@ app.post("/api/streams", requireAuth, (req, res) => {
       youtube_title_description_language, youtube_recording_date, youtube_recording_location,
       youtube_license, youtube_allow_embedding, youtube_publish_to_subscriptions,
       youtube_shorts_remixing, youtube_category, youtube_comments_mode,
-      youtube_who_can_comment, youtube_sort_by, network_optimization
+      youtube_who_can_comment, youtube_sort_by, network_optimization, force_encoding
     } = req.body;
     
     if (!name) {
@@ -1772,9 +1895,10 @@ app.post("/api/streams", requireAuth, (req, res) => {
         youtube_caption_certification, youtube_title_description_language, youtube_recording_date, 
         youtube_recording_location, youtube_license, youtube_allow_embedding, 
         youtube_publish_to_subscriptions, youtube_shorts_remixing, youtube_category, 
-        youtube_comments_mode, youtube_who_can_comment, youtube_sort_by, network_optimization
+        youtube_comments_mode, youtube_who_can_comment, youtube_sort_by, network_optimization,
+        force_encoding
       ) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.session.user.id, 
       name, 
@@ -1819,7 +1943,8 @@ app.post("/api/streams", requireAuth, (req, res) => {
       youtube_comments_mode || 'on',
       youtube_who_can_comment || 'anyone',
       youtube_sort_by || 'top',
-      network_optimization !== undefined ? (network_optimization ? 1 : 0) : 1
+      network_optimization !== undefined ? (network_optimization ? 1 : 0) : 1,
+      force_encoding !== undefined ? (force_encoding ? 1 : 0) : 1
     );
 
     // Mark metadata slot as used if applicable
@@ -1864,7 +1989,7 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
       youtube_title_description_language, youtube_recording_date, youtube_recording_location,
       youtube_license, youtube_allow_embedding, youtube_publish_to_subscriptions,
       youtube_shorts_remixing, youtube_category, youtube_comments_mode,
-      youtube_who_can_comment, youtube_sort_by, network_optimization
+      youtube_who_can_comment, youtube_sort_by, network_optimization, force_encoding
     } = req.body;
     
     if (!name) {
@@ -1885,7 +2010,7 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
           youtube_recording_location = ?, youtube_license = ?, youtube_allow_embedding = ?, 
           youtube_publish_to_subscriptions = ?, youtube_shorts_remixing = ?, youtube_category = ?, 
           youtube_comments_mode = ?, youtube_who_can_comment = ?, youtube_sort_by = ?,
-          network_optimization = ?
+          network_optimization = ?, force_encoding = ?
       WHERE id = ? AND user_id = ?
     `).run(
       name, 
@@ -1931,6 +2056,7 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
       youtube_who_can_comment || 'anyone',
       youtube_sort_by || 'top',
       network_optimization !== undefined ? (network_optimization ? 1 : 0) : 1,
+      force_encoding !== undefined ? (force_encoding ? 1 : 0) : 1,
       req.params.id,
       req.session.user.id
     );
@@ -2680,8 +2806,12 @@ async function startServer() {
   }
 
   const PORT = 3000;
-  const server = app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", async () => {
     console.log(`SaungStream running on http://localhost:${PORT}`);
+    
+    // Auto-resume live streams and pending encodings on startup
+    await streamManager.resumeLiveStreams();
+    encodingQueue.resumePending();
   });
 
   // Increase timeouts for large file uploads
