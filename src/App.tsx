@@ -71,7 +71,7 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
 const UPLOAD_API_URL = window.location.hostname === 'saungstream.my.id' 
-  ? 'https://upload.saungstream.my.id/api/media/upload' 
+  ? `${window.location.protocol}//unggah.saungstream.my.id/api/media/upload` 
   : '/api/media/upload';
 
 function cn(...inputs: ClassValue[]) {
@@ -1195,42 +1195,67 @@ const MediaLibrary = () => {
 
     setUploading(true);
     setUploadProgress(0);
-    const formData = new FormData();
-    formData.append("file", file);
 
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", UPLOAD_API_URL, true);
-    xhr.withCredentials = true;
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB per chunk
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const fileId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const fileName = file.name;
 
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const percentComplete = Math.round((event.loaded / event.total) * 100);
-        setUploadProgress(percentComplete);
+    try {
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        const chunkUrl = window.location.hostname === 'saungstream.my.id'
+          ? `${window.location.protocol}//unggah.saungstream.my.id/api/upload-chunk?chunkIndex=${i}&totalChunks=${totalChunks}&fileId=${fileId}`
+          : `/api/upload-chunk?chunkIndex=${i}&totalChunks=${totalChunks}&fileId=${fileId}`;
+
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", chunkUrl, true);
+          xhr.withCredentials = true;
+
+          xhr.onload = () => {
+            if (xhr.status === 200) {
+              const progress = Math.round(((i + 1) / totalChunks) * 100);
+              setUploadProgress(progress);
+              resolve(true);
+            } else {
+              reject(new Error(`Chunk ${i} failed`));
+            }
+          };
+
+          xhr.onerror = () => reject(new Error(`Network error on chunk ${i}`));
+          xhr.send(chunk);
+        });
       }
-    };
 
-    xhr.onload = () => {
-      if (xhr.status === 200) {
+      // All chunks uploaded, now merge
+      const mergeUrl = window.location.hostname === 'saungstream.my.id'
+        ? `${window.location.protocol}//unggah.saungstream.my.id/api/merge-chunks`
+        : '/api/merge-chunks';
+
+      const mergeRes = await fetch(mergeUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName, fileId, totalChunks })
+      });
+
+      if (mergeRes.ok) {
         fetchMedia();
+        alert("Upload successful!");
       } else {
-        try {
-          const data = JSON.parse(xhr.responseText);
-          alert(data.error || "Upload failed");
-        } catch (e) {
-          alert("Upload failed");
-        }
+        const data = await mergeRes.json();
+        alert(data.error || "Merge failed");
       }
+    } catch (err: any) {
+      console.error("Upload error:", err);
+      alert(err.message || "Upload failed");
+    } finally {
       setUploading(false);
       setUploadProgress(0);
-    };
-
-    xhr.onerror = () => {
-      alert("Upload failed");
-      setUploading(false);
-      setUploadProgress(0);
-    };
-
-    xhr.send(formData);
+    }
   };
 
   const deleteMedia = async (id: number) => {
