@@ -69,6 +69,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { io } from "socket.io-client";
 
 const UPLOAD_API_URL = window.location.hostname === 'saungstream.my.id' 
   ? `${window.location.protocol}//unggah.saungstream.my.id/api/media/upload` 
@@ -318,6 +319,23 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{latestVersion: string, changelog: string[]} | null>(null);
+
+  useEffect(() => {
+    const socket = io();
+    
+    socket.on("system:update_available", (data) => {
+      console.log("System update signal received:", data);
+      // Show a non-blocking notification or just reload
+      // For "Hard Refresh", we can add a cache-busting parameter
+      setTimeout(() => {
+        window.location.href = window.location.pathname + "?v=" + (data.version || Date.now());
+      }, 3000); // Give user 3 seconds to see the message if we had a toast
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
 
   const isExpired = user && user.role !== 'admin' && user.expires_at && new Date(user.expires_at) < new Date();
   const daysRemaining = user && user.expires_at ? Math.ceil((new Date(user.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)) : null;
@@ -3247,6 +3265,7 @@ const SettingsPage = () => {
   const [uploading, setUploading] = useState(false);
   const [timezone, setTimezone] = useState("UTC");
   const [geminiApiKey, setGeminiApiKey] = useState("");
+  const [githubToken, setGithubToken] = useState("");
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -3255,6 +3274,7 @@ const SettingsPage = () => {
         const data = await res.json();
         if (data.timezone) setTimezone(data.timezone);
         if (data.gemini_api_key) setGeminiApiKey(data.gemini_api_key);
+        if (data.github_token) setGithubToken(data.github_token);
       }
     };
     fetchSettings();
@@ -3287,7 +3307,11 @@ const SettingsPage = () => {
       const res = await fetch("/api/system/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ timezone, gemini_api_key: geminiApiKey })
+        body: JSON.stringify({ 
+          timezone, 
+          gemini_api_key: geminiApiKey,
+          github_token: githubToken
+        })
       });
       if (res.ok) {
         alert("System settings saved");
@@ -3396,6 +3420,18 @@ const SettingsPage = () => {
                     className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                   />
                   <p className="text-xs text-slate-500 mt-1 italic">API Key ini digunakan untuk fitur AI Metadata Generator.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">GitHub Personal Access Token</label>
+                  <input 
+                    type="password" 
+                    value={githubToken}
+                    onChange={e => setGithubToken(e.target.value)}
+                    placeholder="Enter GitHub PAT"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  />
+                  <p className="text-xs text-slate-500 mt-1 italic">Diperlukan jika Anda mengubah repository menjadi Private agar fitur Update tetap berfungsi.</p>
                 </div>
 
                 <button 
