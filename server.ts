@@ -1304,21 +1304,31 @@ app.post("/api/merge-chunks", requireAuth, async (req, res) => {
   const chunkDir = path.join(CHUNKS_DIR, fileId);
   const finalPath = path.join(UPLOADS_DIR, fileName);
   
+  console.log(`Starting merge for ${fileName} (${totalChunks} chunks)`);
+  
   try {
     const writeStream = fs.createWriteStream(finalPath);
     
+    // Sequential merge using streams to keep memory usage low
     for (let i = 0; i < (totalChunks as unknown as number); i++) {
       const chunkPath = path.join(chunkDir, i.toString());
       if (fs.existsSync(chunkPath)) {
-        const chunkBuffer = fs.readFileSync(chunkPath);
-        writeStream.write(chunkBuffer);
-        fs.unlinkSync(chunkPath); // Delete chunk after merging
+        await new Promise((resolve, reject) => {
+          const readStream = fs.createReadStream(chunkPath);
+          readStream.pipe(writeStream, { end: false });
+          readStream.on("end", () => {
+            fs.unlinkSync(chunkPath); // Delete chunk after merging
+            resolve(true);
+          });
+          readStream.on("error", reject);
+        });
       }
     }
     
     writeStream.end();
     
     writeStream.on("finish", async () => {
+      console.log(`Merge finished for ${fileName}`);
       if (fs.existsSync(chunkDir)) {
         try {
           fs.rmdirSync(chunkDir); // Delete chunk directory
@@ -1341,6 +1351,12 @@ app.post("/api/merge-chunks", requireAuth, async (req, res) => {
         message: "File uploaded and merged successfully" 
       });
     });
+
+    writeStream.on("error", (err) => {
+      console.error("WriteStream error:", err);
+      res.status(500).json({ error: "Failed to write merged file" });
+    });
+
   } catch (error) {
     console.error("Merge error:", error);
     res.status(500).json({ error: "Failed to merge file chunks" });
