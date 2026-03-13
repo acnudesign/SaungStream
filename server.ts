@@ -297,7 +297,8 @@ const migrate = () => {
       if (!columns.includes("youtube_allow_embedding")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_allow_embedding INTEGER DEFAULT 0").run();
       if (!columns.includes("youtube_publish_to_subscriptions")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_publish_to_subscriptions INTEGER DEFAULT 1").run();
       if (!columns.includes("youtube_shorts_remixing")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_shorts_remixing TEXT DEFAULT 'allow_video_audio'").run();
-      if (!columns.includes("youtube_category")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_category TEXT DEFAULT '24'").run(); // 24 is Entertainment
+      if (!columns.includes("youtube_category")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_category TEXT DEFAULT '10'").run(); // 10 is Music
+      if (!columns.includes("thumbnail_path")) db.prepare("ALTER TABLE streams ADD COLUMN thumbnail_path TEXT").run();
       if (!columns.includes("youtube_comments_mode")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_comments_mode TEXT DEFAULT 'on'").run();
       if (!columns.includes("youtube_who_can_comment")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_who_can_comment TEXT DEFAULT 'anyone'").run();
       if (!columns.includes("youtube_sort_by")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_sort_by TEXT DEFAULT 'top'").run();
@@ -1218,7 +1219,7 @@ async function createYouTubeBroadcast(streamId: number) {
     let title = stream.name;
     let description = stream.description || "Live Stream via SaungStream";
     let tags = stream.youtube_tags;
-    let thumbnailUrl = null;
+    let thumbnailUrl = stream.thumbnail_path || null;
 
     if (stream.use_ai_metadata && stream.start_date && stream.start_time) {
       const date = new Date(`${stream.start_date}T${stream.start_time}:00`);
@@ -1300,13 +1301,13 @@ async function createYouTubeBroadcast(streamId: number) {
 
     // Update the video metadata (tags, category, etc.)
     await youtube.videos.update({
-      part: ["snippet", "status", "recordingDetails"],
+      part: ["snippet", "status", "recordingDetails", "contentDetails"],
       requestBody: {
         id: broadcastId!,
         snippet: {
           title: title,
           description: description,
-          categoryId: stream.youtube_category || "24",
+          categoryId: stream.youtube_category || "10",
           tags: tags ? tags.split(",").map((t: string) => t.trim()) : [],
           defaultLanguage: stream.youtube_language || "id",
           defaultAudioLanguage: stream.youtube_language || "id"
@@ -1318,8 +1319,11 @@ async function createYouTubeBroadcast(streamId: number) {
         recordingDetails: {
           recordingDate: stream.youtube_recording_date ? new Date(stream.youtube_recording_date).toISOString() : undefined,
           locationDescription: stream.youtube_recording_location
+        },
+        contentDetails: {
+          hasAlteredContent: stream.youtube_altered_content === 1
         }
-      }
+      } as any
     });
 
     // Upload thumbnail if available
@@ -1608,12 +1612,28 @@ const profileStorage = multer.diskStorage({
 });
 const uploadProfile = multer({ storage: profileStorage });
 
+const thumbnailStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, THUMBNAILS_DIR);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `thumb-${Date.now()}${ext}`);
+  }
+});
+const uploadThumbnail = multer({ storage: thumbnailStorage });
+
 app.post("/api/me/profile", requireAuth, uploadProfile.single("profile"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
   
   const profilePath = `/profiles/${req.file.filename}`;
   db.prepare("UPDATE users SET profile_picture = ? WHERE id = ?").run(profilePath, req.session.user.id);
   res.json({ success: true, profile_picture: profilePath });
+});
+
+app.post("/api/streams/thumbnail/upload", requireAuth, uploadThumbnail.single("thumbnail"), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+  res.json({ filepath: req.file.filename });
 });
 
 app.put("/api/me", requireAuth, (req, res) => {
@@ -1741,7 +1761,12 @@ app.get("/api/user/storage", requireAuth, (req, res) => {
 });
 
 app.get("/api/media", requireAuth, (req, res) => {
-  const media = db.prepare("SELECT * FROM media WHERE user_id = ? ORDER BY created_at DESC").all(req.session.user.id);
+  let media;
+  if (req.session.user.role === 'admin') {
+    media = db.prepare("SELECT * FROM media ORDER BY created_at DESC").all();
+  } else {
+    media = db.prepare("SELECT * FROM media WHERE user_id = ? ORDER BY created_at DESC").all(req.session.user.id);
+  }
   res.json(media);
 });
 
@@ -1874,14 +1899,19 @@ app.get("/api/metadata/fetch", requireAuth, (req, res) => {
 
 // Streams
 app.get("/api/streams", requireAuth, (req, res) => {
-  const streams = db.prepare(`
+  let query = `
     SELECT s.*, p.name as playlist_name, m.filename as video_name
     FROM streams s 
     LEFT JOIN playlists p ON s.playlist_id = p.id 
     LEFT JOIN media m ON s.video_id = m.id
-    WHERE s.user_id = ?
-    ORDER BY s.created_at DESC
-  `).all(req.session.user.id);
+  `;
+  
+  let streams;
+  if (req.session.user.role === 'admin') {
+    streams = db.prepare(query + " ORDER BY s.created_at DESC").all();
+  } else {
+    streams = db.prepare(query + " WHERE s.user_id = ? ORDER BY s.created_at DESC").all(req.session.user.id);
+  }
   res.json(streams);
 });
 
@@ -1897,7 +1927,8 @@ app.post("/api/streams", requireAuth, (req, res) => {
       youtube_title_description_language, youtube_recording_date, youtube_recording_location,
       youtube_license, youtube_allow_embedding, youtube_publish_to_subscriptions,
       youtube_shorts_remixing, youtube_category, youtube_comments_mode,
-      youtube_who_can_comment, youtube_sort_by, network_optimization, force_encoding
+      youtube_who_can_comment, youtube_sort_by, network_optimization, force_encoding,
+      thumbnail_path
     } = req.body;
     
     if (!name) {
@@ -1916,9 +1947,9 @@ app.post("/api/streams", requireAuth, (req, res) => {
         youtube_recording_location, youtube_license, youtube_allow_embedding, 
         youtube_publish_to_subscriptions, youtube_shorts_remixing, youtube_category, 
         youtube_comments_mode, youtube_who_can_comment, youtube_sort_by, network_optimization,
-        force_encoding
+        force_encoding, thumbnail_path
       ) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       req.session.user.id, 
       name, 
@@ -1959,12 +1990,13 @@ app.post("/api/streams", requireAuth, (req, res) => {
       youtube_allow_embedding !== undefined ? (youtube_allow_embedding ? 1 : 0) : 1,
       youtube_publish_to_subscriptions !== undefined ? (youtube_publish_to_subscriptions ? 1 : 0) : 1,
       youtube_shorts_remixing || 'allow_video_audio',
-      youtube_category || '24',
+      youtube_category || '10',
       youtube_comments_mode || 'on',
       youtube_who_can_comment || 'anyone',
       youtube_sort_by || 'top',
       network_optimization !== undefined ? (network_optimization ? 1 : 0) : 1,
-      force_encoding !== undefined ? (force_encoding ? 1 : 0) : 1
+      force_encoding !== undefined ? (force_encoding ? 1 : 0) : 1,
+      thumbnail_path || null
     );
 
     // Mark metadata slot as used if applicable
@@ -2009,7 +2041,8 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
       youtube_title_description_language, youtube_recording_date, youtube_recording_location,
       youtube_license, youtube_allow_embedding, youtube_publish_to_subscriptions,
       youtube_shorts_remixing, youtube_category, youtube_comments_mode,
-      youtube_who_can_comment, youtube_sort_by, network_optimization, force_encoding
+      youtube_who_can_comment, youtube_sort_by, network_optimization, force_encoding,
+      thumbnail_path
     } = req.body;
     
     if (!name) {
@@ -2030,7 +2063,7 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
           youtube_recording_location = ?, youtube_license = ?, youtube_allow_embedding = ?, 
           youtube_publish_to_subscriptions = ?, youtube_shorts_remixing = ?, youtube_category = ?, 
           youtube_comments_mode = ?, youtube_who_can_comment = ?, youtube_sort_by = ?,
-          network_optimization = ?, force_encoding = ?
+          network_optimization = ?, force_encoding = ?, thumbnail_path = ?
       WHERE id = ? AND user_id = ?
     `).run(
       name, 
@@ -2071,12 +2104,13 @@ app.put("/api/streams/:id", requireAuth, (req, res) => {
       youtube_allow_embedding !== undefined ? (youtube_allow_embedding ? 1 : 0) : 1,
       youtube_publish_to_subscriptions !== undefined ? (youtube_publish_to_subscriptions ? 1 : 0) : 1,
       youtube_shorts_remixing || 'allow_video_audio',
-      youtube_category || '24',
+      youtube_category || '10',
       youtube_comments_mode || 'on',
       youtube_who_can_comment || 'anyone',
       youtube_sort_by || 'top',
       network_optimization !== undefined ? (network_optimization ? 1 : 0) : 1,
       force_encoding !== undefined ? (force_encoding ? 1 : 0) : 1,
+      thumbnail_path || null,
       req.params.id,
       req.session.user.id
     );
@@ -2501,6 +2535,49 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
   }, 2000);
 });
 
+app.get("/api/admin/global-stats", requireAdmin, (req, res) => {
+  const activeStreams = db.prepare("SELECT COUNT(*) as count FROM streams WHERE status = 'live'").get() as any;
+  const totalMedia = db.prepare("SELECT COUNT(*) as count FROM media").get() as any;
+  
+  const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
+  const tz = timezone ? timezone.value : "Asia/Jakarta";
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
+  
+  const scheduledToday = db.prepare("SELECT COUNT(*) as count FROM streams WHERE start_date = ? AND schedule_enabled = 1").get(today) as any;
+  
+  res.json({
+    activeStreams: activeStreams.count,
+    totalMedia: totalMedia.count,
+    scheduledToday: scheduledToday.count
+  });
+});
+
+// Network stats tracking
+let lastNetStats = { rx: 0, tx: 0, time: Date.now() };
+
+function getNetworkStats() {
+  try {
+    const data = fs.readFileSync("/proc/net/dev", "utf8");
+    const lines = data.split("\n");
+    let totalRx = 0;
+    let totalTx = 0;
+
+    for (const line of lines) {
+      if (line.includes(":") && !line.trim().startsWith("lo:")) {
+        const parts = line.split(":")[1].trim().split(/\s+/);
+        totalRx += parseInt(parts[0], 10);
+        totalTx += parseInt(parts[8], 10);
+      }
+    }
+    return { rx: totalRx, tx: totalTx };
+  } catch (e) {
+    return { rx: 0, tx: 0 };
+  }
+}
+
+// Initialize network stats
+lastNetStats = { ...getNetworkStats(), time: Date.now() };
+
 app.get("/api/system/stats", requireAuth, requireAdmin, async (req, res) => {
   const cpus = os.cpus();
   const load = os.loadavg();
@@ -2509,9 +2586,23 @@ app.get("/api/system/stats", requireAuth, requireAdmin, async (req, res) => {
   const disk = await checkDiskSpace(process.cwd());
   const uptime = os.uptime();
 
+  // Calculate network throughput
+  const currentNet = getNetworkStats();
+  const currentTime = Date.now();
+  const timeDiff = (currentTime - lastNetStats.time) / 1000; // in seconds
+  
+  let downloadRate = 0;
+  let uploadRate = 0;
+
+  if (timeDiff > 0) {
+    downloadRate = Math.max(0, (currentNet.rx - lastNetStats.rx) / timeDiff / 1024 / 1024 * 8); // Mbps
+    uploadRate = Math.max(0, (currentNet.tx - lastNetStats.tx) / timeDiff / 1024 / 1024 * 8); // Mbps
+  }
+
+  // Update last stats for next call
+  lastNetStats = { ...currentNet, time: currentTime };
+
   // Calculate CPU usage percentage more accurately or show raw load
-  // load[0] is 1 minute average. On a 6 core machine, 6.00 is 100% total usage.
-  // But users often think in "per core" percentage (like top).
   const cpuUsagePercent = Math.round((load[0] / cpus.length) * 100);
 
   const stats = {
@@ -2533,8 +2624,8 @@ app.get("/api/system/stats", requireAuth, requireAdmin, async (req, res) => {
       usage: Math.round(((disk.size - disk.free) / disk.size) * 100)
     },
     network: {
-      download: (Math.random() * 100).toFixed(2), // Mocked
-      upload: (Math.random() * 50).toFixed(2)    // Mocked
+      download: downloadRate.toFixed(2),
+      upload: uploadRate.toFixed(2)
     },
     system: {
       platform: os.platform(),
