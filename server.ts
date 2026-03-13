@@ -301,7 +301,7 @@ const migrate = () => {
       if (!columns.includes("youtube_comments_mode")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_comments_mode TEXT DEFAULT 'on'").run();
       if (!columns.includes("youtube_who_can_comment")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_who_can_comment TEXT DEFAULT 'anyone'").run();
       if (!columns.includes("youtube_sort_by")) db.prepare("ALTER TABLE streams ADD COLUMN youtube_sort_by TEXT DEFAULT 'top'").run();
-      if (!columns.includes("force_encoding")) db.prepare("ALTER TABLE streams ADD COLUMN force_encoding INTEGER DEFAULT 1").run();
+      if (!columns.includes("force_encoding")) db.prepare("ALTER TABLE streams ADD COLUMN force_encoding INTEGER DEFAULT 0").run();
     }
 
     if (table === "metadata_slots") {
@@ -641,8 +641,10 @@ class StreamManager {
       inputArgs = ["-i", video.filepath];
 
       if (video.is_pre_encoded && !stream.force_encoding) {
+        this.log(stream.user_id, "info", `Using Direct Stream (No Encoding) for ${video.filename}`);
         codecArgs = ["-c", "copy"];
       } else {
+        this.log(stream.user_id, "info", `Transcoding ${video.filename} (Force Encoding: ${!!stream.force_encoding})`);
         const [width, height] = (stream.resolution || "1280x720").split("x");
         const useOptimization = stream.network_optimization !== 0;
         codecArgs = [
@@ -688,8 +690,10 @@ class StreamManager {
       // For playlists, we usually re-encode to ensure transitions are smooth unless all items are identical in format
       const allPreEncoded = playlistItems.every(item => item.is_pre_encoded);
       if (allPreEncoded && !stream.force_encoding) {
+        this.log(stream.user_id, "info", `Using Direct Stream (No Encoding) for playlist: ${stream.name}`);
         codecArgs = ["-c", "copy"];
       } else {
+        this.log(stream.user_id, "info", `Transcoding playlist: ${stream.name} (Force Encoding: ${!!stream.force_encoding}, All Pre-encoded: ${allPreEncoded})`);
         const [width, height] = (stream.resolution || "1280x720").split("x");
         const useOptimization = stream.network_optimization !== 0;
         codecArgs = [
@@ -1739,6 +1743,20 @@ app.get("/api/user/storage", requireAuth, (req, res) => {
 app.get("/api/media", requireAuth, (req, res) => {
   const media = db.prepare("SELECT * FROM media WHERE user_id = ? ORDER BY created_at DESC").all(req.session.user.id);
   res.json(media);
+});
+
+app.post("/api/media/:id/encode", requireAuth, (req, res) => {
+  const media = db.prepare("SELECT * FROM media WHERE id = ? AND user_id = ?").get(req.params.id, req.session.user.id) as any;
+  if (!media) return res.status(404).json({ error: "Media not found" });
+  
+  if (media.status === 'processing') {
+    return res.status(400).json({ error: "Media is already being processed" });
+  }
+
+  db.prepare("UPDATE media SET status = 'processing' WHERE id = ?").run(media.id);
+  encodingQueue.add(media.id);
+  
+  res.json({ success: true, message: "Encoding started" });
 });
 
 app.get("/api/media/:id/stream", requireAuth, (req, res) => {
