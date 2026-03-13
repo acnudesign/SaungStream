@@ -2075,7 +2075,7 @@ const Streams = () => {
               youtube_who_can_comment: "anyone",
               youtube_sort_by: "top",
               network_optimization: true,
-              force_encoding: true
+              force_encoding: false
             }); 
           }}
           className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all"
@@ -2544,77 +2544,79 @@ const Streams = () => {
                 onClick={() => setShowAdvanced(!showAdvanced)}
                 className="text-sm font-bold text-indigo-600 flex items-center gap-2 mb-4"
               >
-                {showAdvanced ? 'Hide' : 'Show'} Quality Settings
+                {showAdvanced ? 'Hide' : 'Show'} Advanced Settings
               </button>
 
               {showAdvanced && (
-                <div className="p-6 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-800">
-                  <label className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-4 block">Stream Quality Preset</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {qualityPresets.map(preset => (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        onClick={() => setFormData({...formData, bitrate: preset.bitrate, resolution: preset.resolution})}
-                        className={cn(
-                          "p-4 rounded-xl border text-left transition-all",
-                          formData.bitrate === preset.bitrate && formData.resolution === preset.resolution
-                            ? "bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-none"
-                            : "bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-indigo-300"
-                        )}
-                      >
-                        <p className="font-bold text-sm">{preset.name}</p>
-                        <p className={cn(
-                          "text-[10px] mt-1",
-                          formData.bitrate === preset.bitrate && formData.resolution === preset.resolution ? "text-indigo-100" : "text-slate-400"
-                        )}>
-                          {preset.resolution} @ {(preset.bitrate / 1000).toFixed(1)} Mbps
-                        </p>
-                        <p className={cn(
-                          "text-[10px] mt-2 italic",
-                          formData.bitrate === preset.bitrate && formData.resolution === preset.resolution ? "text-indigo-200" : "text-slate-500"
-                        )}>
-                          {preset.description}
-                        </p>
-                      </button>
-                    ))}
+                <div className="space-y-4">
+                  <div className="p-6 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                    <label className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-4 block">Stream Quality Preset</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {qualityPresets.map(preset => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => setFormData({...formData, bitrate: preset.bitrate, resolution: preset.resolution})}
+                          className={cn(
+                            "p-4 rounded-xl border text-left transition-all",
+                            formData.bitrate === preset.bitrate && formData.resolution === preset.resolution
+                              ? "bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-none"
+                              : "bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:border-indigo-300"
+                          )}
+                        >
+                          <p className="font-bold text-sm">{preset.name}</p>
+                          <p className={cn(
+                            "text-[10px] mt-1",
+                            formData.bitrate === preset.bitrate && formData.resolution === preset.resolution ? "text-indigo-100" : "text-slate-400"
+                          )}>
+                            {preset.resolution} @ {(preset.bitrate / 1000).toFixed(1)} Mbps
+                          </p>
+                          <p className={cn(
+                            "text-[10px] mt-2 italic",
+                            formData.bitrate === preset.bitrate && formData.resolution === preset.resolution ? "text-indigo-200" : "text-slate-500"
+                          )}>
+                            {preset.description}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="p-6 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-800 dark:text-white">Network Optimization</h4>
+                        <p className="text-[10px] text-slate-500">Use ultrafast encoding and zero-latency tuning to prevent buffering.</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={formData.network_optimization}
+                          onChange={e => setFormData({...formData, network_optimization: e.target.checked})}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-800 dark:text-white">Force Re-encoding</h4>
+                        <p className="text-[10px] text-slate-500">Always re-encode video to ensure maximum compatibility and stability. Recommended OFF for streaming smoothness.</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={formData.force_encoding}
+                          onChange={e => setFormData({...formData, force_encoding: e.target.checked})}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
+                      </label>
+                    </div>
                   </div>
                 </div>
               )}
-
-              <div className="p-6 bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-800 dark:text-white">Network Optimization</h4>
-                    <p className="text-[10px] text-slate-500">Use ultrafast encoding and zero-latency tuning to prevent buffering.</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      checked={formData.network_optimization}
-                      onChange={e => setFormData({...formData, network_optimization: e.target.checked})}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
-                  </label>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-800 dark:text-white">Force Re-encoding</h4>
-                    <p className="text-[10px] text-slate-500">Always re-encode video to ensure maximum compatibility and stability. Recommended for YouTube.</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      checked={formData.force_encoding}
-                      onChange={e => setFormData({...formData, force_encoding: e.target.checked})}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
-                  </label>
-                </div>
-              </div>
             </div>
 
             <div className="flex justify-end gap-4 pt-4">
@@ -2660,7 +2662,7 @@ const Streams = () => {
           <div className="space-y-3">
             <h4 className="font-bold text-amber-800 dark:text-amber-300 text-sm">Optimization Guide</h4>
             <ul className="text-xs text-slate-600 dark:text-slate-400 space-y-2 list-disc pl-4">
-              <li>Always enable <span className="font-bold">Force Re-encoding</span> for playlists to ensure smooth transitions.</li>
+              <li>Recommended <span className="font-bold">OFF</span> for <span className="font-bold">Force Re-encoding</span> to ensure smooth transitions.</li>
               <li>Use <span className="font-bold">Network Optimization</span> to reduce CPU load and prevent frame drops.</li>
               <li>For 1080p, a bitrate of <span className="font-bold">6000-8000kbps</span> is ideal for YouTube.</li>
             </ul>
@@ -3311,7 +3313,7 @@ const SettingsPage = () => {
   const [password, setPassword] = useState("");
   const [updating, setUpdating] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [timezone, setTimezone] = useState("UTC");
+  const [timezone, setTimezone] = useState("Asia/Jakarta");
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [githubToken, setGithubToken] = useState("");
 
