@@ -2424,6 +2424,23 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
         await execAsync("git reset --hard origin/main");
       }
 
+      // 4. Install dependencies and build
+      console.log("Installing dependencies...");
+      try {
+        // Use --no-audit and --no-fund to speed up the process
+        await execAsync("npm install --no-audit --no-fund");
+      } catch (e) {
+        console.error("npm install failed:", e);
+      }
+
+      console.log("Building frontend assets...");
+      try {
+        // Ensure we are building for production
+        await execAsync("NODE_ENV=production npm run build");
+      } catch (e) {
+        console.error("npm run build failed:", e);
+      }
+
       console.log("Update successful, broadcasting refresh signal...");
       // Broadcast to all clients to refresh
       const io = (app as any).io;
@@ -2434,7 +2451,7 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
         });
       }
 
-      // 4. Close database connections to release file locks
+      // 5. Close database connections to release file locks
       console.log("Closing database connections before restart...");
       try {
         db.close();
@@ -2442,7 +2459,7 @@ app.post("/api/system/update", requireAuth, requireAdmin, async (req, res) => {
         console.error("Error closing main DB:", e);
       }
 
-      // 5. Try to rename root files to avoid git unlink errors
+      // 6. Try to rename root files to avoid git unlink errors
       const rootFiles = ["saungstream.db", "sessions.db", "saungstream.db-shm", "saungstream.db-wal"];
       rootFiles.forEach(file => {
         const p = path.join(process.cwd(), file);
@@ -2472,13 +2489,20 @@ app.get("/api/system/stats", requireAuth, requireAdmin, async (req, res) => {
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
   const disk = await checkDiskSpace(process.cwd());
+  const uptime = os.uptime();
 
-  // Mock internet speed for now as real speed test is heavy
+  // Calculate CPU usage percentage more accurately or show raw load
+  // load[0] is 1 minute average. On a 6 core machine, 6.00 is 100% total usage.
+  // But users often think in "per core" percentage (like top).
+  const cpuUsagePercent = Math.round((load[0] / cpus.length) * 100);
+
   const stats = {
     cpu: {
       model: cpus[0].model,
-      usage: Math.round((load[0] / cpus.length) * 100),
-      cores: cpus.length
+      usage: cpuUsagePercent,
+      load: load[0].toFixed(2),
+      cores: cpus.length,
+      speed: cpus[0].speed
     },
     memory: {
       total: Math.round(totalMem / 1024 / 1024 / 1024),
@@ -2493,6 +2517,12 @@ app.get("/api/system/stats", requireAuth, requireAdmin, async (req, res) => {
     network: {
       download: (Math.random() * 100).toFixed(2), // Mocked
       upload: (Math.random() * 50).toFixed(2)    // Mocked
+    },
+    system: {
+      platform: os.platform(),
+      release: os.release(),
+      uptime: Math.round(uptime / 3600), // in hours
+      hostname: os.hostname()
     }
   };
 
