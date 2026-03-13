@@ -2085,43 +2085,61 @@ const Streams = () => {
         </button>
       </header>
 
-      {isCreating && (
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="bg-white dark:bg-slate-900 p-8 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl"
-        >
-          <h2 className="text-xl font-bold mb-6 text-slate-800 dark:text-white">{editingStream ? 'Edit Stream' : 'Create New Stream'}</h2>
-          
-          <div className="mb-8 p-6 bg-indigo-50 dark:bg-indigo-900/10 rounded-2xl border border-indigo-100 dark:border-indigo-800/50">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200 dark:shadow-none">
-                <Wand2 size={20} />
+      <AnimatePresence>
+        {isCreating && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 md:p-10">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => { setIsCreating(false); setEditingStream(null); }}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-4xl max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 p-8 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl custom-scrollbar"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-bold text-slate-800 dark:text-white">{editingStream ? 'Edit Stream Settings' : 'Create New Stream'}</h2>
+                <button 
+                  onClick={() => { setIsCreating(false); setEditingStream(null); }}
+                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full text-slate-500 transition-colors"
+                >
+                  <X size={24} />
+                </button>
               </div>
-              <div>
-                <h3 className="font-bold text-slate-800 dark:text-white">AI Metadata Generator</h3>
-                <p className="text-xs text-slate-500">Generate judul, deskripsi, dan tag otomatis</p>
+              
+              <div className="mb-8 p-6 bg-indigo-50 dark:bg-indigo-900/10 rounded-2xl border border-indigo-100 dark:border-indigo-800/50">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200 dark:shadow-none">
+                    <Wand2 size={20} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800 dark:text-white">AI Metadata Generator</h3>
+                    <p className="text-xs text-slate-500">Generate judul, deskripsi, dan tag otomatis</p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <input 
+                    type="text" 
+                    placeholder="Masukkan kata kunci (misal: Murottal Pagi, Ceramah Lucu...)" 
+                    value={aiKeywords}
+                    onChange={e => setAiKeywords(e.target.value)}
+                    className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <button 
+                    type="button"
+                    onClick={handleAiGenerate}
+                    disabled={isGenerating || !aiKeywords}
+                    className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {isGenerating ? <RefreshCw size={18} className="animate-spin" /> : <Sparkles size={18} />}
+                    Generate
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="flex gap-3">
-              <input 
-                type="text" 
-                placeholder="Masukkan kata kunci (misal: Murottal Pagi, Ceramah Lucu...)" 
-                value={aiKeywords}
-                onChange={e => setAiKeywords(e.target.value)}
-                className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              <button 
-                type="button"
-                onClick={handleAiGenerate}
-                disabled={isGenerating || !aiKeywords}
-                className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-2"
-              >
-                {isGenerating ? <RefreshCw size={18} className="animate-spin" /> : <Sparkles size={18} />}
-                Generate
-              </button>
-            </div>
-          </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2616,9 +2634,11 @@ const Streams = () => {
             </div>
           </form>
         </motion.div>
-      )}
+      </div>
+    )}
+  </AnimatePresence>
 
-      {/* Streaming Tips Section */}
+  {/* Streaming Tips Section */}
       <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-2xl p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="p-2 bg-amber-100 dark:bg-amber-800 rounded-lg text-amber-600 dark:text-amber-400">
