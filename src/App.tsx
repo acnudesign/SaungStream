@@ -1011,63 +1011,81 @@ const Dashboard = () => {
 
       {user.role === 'admin' && systemStats && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
             <div className="flex items-center justify-between mb-4">
-              <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+              <div className="p-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-xl">
                 <Cpu size={24} />
               </div>
-              <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-full">{systemStats.cpu.usage}%</span>
+              <div className="text-right">
+                <span className="text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-2 py-1 rounded-full">{systemStats.cpu.usage}%</span>
+                <p className="text-[10px] text-slate-400 mt-1 font-mono">Load: {systemStats.cpu.load}</p>
+              </div>
             </div>
-            <p className="text-slate-500 text-sm font-medium">CPU Usage</p>
-            <div className="w-full bg-slate-100 h-2 rounded-full mt-2">
-              <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${systemStats.cpu.usage}%` }}></div>
+            <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">CPU ({systemStats.cpu.cores} Cores)</p>
+            <p className="text-[10px] text-slate-400 truncate mb-2" title={systemStats.cpu.model}>{systemStats.cpu.model}</p>
+            <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full mt-2">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(100, systemStats.cpu.usage)}%` }}
+                className="bg-blue-600 h-2 rounded-full"
+              ></motion.div>
             </div>
           </div>
 
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
             <div className="flex items-center justify-between mb-4">
-              <div className="p-3 bg-purple-50 text-purple-600 rounded-xl">
+              <div className="p-3 bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400 rounded-xl">
                 <Activity size={24} />
               </div>
-              <span className="text-xs font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-full">{systemStats.memory.usage}%</span>
+              <span className="text-xs font-bold text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20 px-2 py-1 rounded-full">{systemStats.memory.usage}%</span>
             </div>
-            <p className="text-slate-500 text-sm font-medium">Memory (RAM)</p>
-            <p className="text-xs text-slate-400 mt-1">{systemStats.memory.total - systemStats.memory.free}GB / {systemStats.memory.total}GB</p>
-            <div className="w-full bg-slate-100 h-2 rounded-full mt-2">
-              <div className="bg-purple-600 h-2 rounded-full" style={{ width: `${systemStats.memory.usage}%` }}></div>
+            <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Memory (RAM)</p>
+            <p className="text-xs text-slate-400 mt-1 font-mono">{systemStats.memory.total - systemStats.memory.free}GB / {systemStats.memory.total}GB</p>
+            <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full mt-2">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${systemStats.memory.usage}%` }}
+                className="bg-purple-600 h-2 rounded-full"
+              ></motion.div>
             </div>
           </div>
 
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
             <div className="flex items-center justify-between mb-4">
-              <div className="p-3 bg-orange-50 text-orange-600 rounded-xl">
+              <div className="p-3 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 rounded-xl">
                 <HardDrive size={24} />
               </div>
-              <span className="text-xs font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded-full">{systemStats.disk.usage}%</span>
+              <span className="text-xs font-bold text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20 px-2 py-1 rounded-full">{systemStats.disk.usage}%</span>
             </div>
-            <p className="text-slate-500 text-sm font-medium">Disk Usage</p>
-            <p className="text-xs text-slate-400 mt-1">{systemStats.disk.total - systemStats.disk.free}GB / {systemStats.disk.total}GB</p>
-            <div className="w-full bg-slate-100 h-2 rounded-full mt-2">
-              <div className="bg-orange-600 h-2 rounded-full" style={{ width: `${systemStats.disk.usage}%` }}></div>
+            <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Disk Usage</p>
+            <p className="text-xs text-slate-400 mt-1 font-mono">{systemStats.disk.total - systemStats.disk.free}GB / {systemStats.disk.total}GB</p>
+            <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full mt-2">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${systemStats.disk.usage}%` }}
+                className="bg-orange-600 h-2 rounded-full"
+              ></motion.div>
             </div>
           </div>
 
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
             <div className="flex items-center justify-between mb-4">
-              <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-                <Activity size={24} />
+              <div className="p-3 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-xl">
+                <Info size={24} />
               </div>
+              <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded-full uppercase tracking-wider">System Info</span>
             </div>
-            <p className="text-slate-500 text-sm font-medium">Internet Speed</p>
-            <div className="flex items-center gap-4 mt-2">
-              <div className="flex items-center gap-1 text-emerald-600">
-                <ArrowDown size={14} />
-                <span className="text-sm font-bold">{systemStats.network.download} Mbps</span>
-              </div>
-              <div className="flex items-center gap-1 text-blue-600">
-                <ArrowUp size={14} />
-                <span className="text-sm font-bold">{systemStats.network.upload} Mbps</span>
-              </div>
+            <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Server Status</p>
+            <div className="mt-2 space-y-1">
+              <p className="text-[10px] text-slate-400 font-mono flex justify-between">
+                <span>OS:</span> <span className="text-slate-300">{systemStats.system.platform} {systemStats.system.release}</span>
+              </p>
+              <p className="text-[10px] text-slate-400 font-mono flex justify-between">
+                <span>Uptime:</span> <span className="text-slate-300">{systemStats.system.uptime} Hours</span>
+              </p>
+              <p className="text-[10px] text-slate-400 font-mono flex justify-between">
+                <span>Hostname:</span> <span className="text-slate-300">{systemStats.system.hostname}</span>
+              </p>
             </div>
           </div>
         </div>
