@@ -1438,10 +1438,20 @@ const MediaLibrary = () => {
                     <RefreshCw size={10} className="animate-spin" />
                     Encoding
                   </span>
-                ) : item.is_pre_encoded === 1 && (
+                ) : item.is_pre_encoded === 1 ? (
                   <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded uppercase">
                     Encoded
                   </span>
+                ) : (
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      fetch(`/api/media/${item.id}/encode`, { method: 'POST' }).then(() => fetchMedia());
+                    }}
+                    className="text-[10px] font-bold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/20 px-1.5 py-0.5 rounded uppercase hover:bg-indigo-100 transition-colors"
+                  >
+                    Encode Now
+                  </button>
                 )}
               </div>
               <div className="flex items-center justify-between">
@@ -1784,7 +1794,7 @@ const Streams = () => {
     youtube_who_can_comment: "anyone",
     youtube_sort_by: "top",
     network_optimization: true,
-    force_encoding: true
+    force_encoding: false
   });
 
   const [aiKeywords, setAiKeywords] = useState("");
