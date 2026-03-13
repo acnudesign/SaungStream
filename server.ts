@@ -751,7 +751,7 @@ class StreamManager {
       // Just drain it
     });
 
-    db.prepare("UPDATE streams SET status = 'live', started_at = CURRENT_TIMESTAMP WHERE id = ?").run(streamId);
+    db.prepare("UPDATE streams SET status = 'live', started_at = COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id = ?").run(streamId);
     this.log(stream.user_id, "info", `Stream ${stream.name} started.`);
 
     ffmpegProcess.on("error", (err) => {
@@ -824,7 +824,7 @@ class StreamManager {
   private async handleRepetition(stream: any) {
     try {
       const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
-      const tz = timezone ? timezone.value : "UTC";
+      const tz = timezone ? timezone.value : "Asia/Jakarta";
       
       const nextRun = calculateNextRun(stream, tz);
       if (!nextRun) {
@@ -1203,7 +1203,7 @@ async function createYouTubeBroadcast(streamId: number) {
     const youtube = await getYouTubeClient(stream.youtube_channel_id);
     
     const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
-    const tz = timezone ? timezone.value : "UTC";
+    const tz = timezone ? timezone.value : "Asia/Jakarta";
     
     let scheduledTime = getISOWithOffset(stream.start_date, stream.start_time, tz);
     
@@ -1861,7 +1861,7 @@ app.get("/api/metadata/fetch", requireAuth, (req, res) => {
 
   try {
     const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
-    const tz = timezone ? timezone.value : "UTC";
+    const tz = timezone ? timezone.value : "Asia/Jakarta";
     
     const targetDate = new Date(`${date}T${time}:00`);
     const metadata = getMetadataForTime(req.session.user.id, targetDate, tz, true);
@@ -2103,7 +2103,7 @@ app.post("/api/streams/:id/start", requireAuth, async (req, res) => {
   
   // Update last_triggered to prevent scheduler from picking it up in the same minute
   const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
-  const tz = timezone ? timezone.value : "UTC";
+  const tz = timezone ? timezone.value : "Asia/Jakarta";
   const now = new Date();
   const formatter = new Intl.DateTimeFormat('en-GB', {
     timeZone: tz,
@@ -2239,7 +2239,7 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, (req, res) => {
 // System Stats
 app.get("/api/system/time", requireAuth, (req, res) => {
   const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
-  const tz = timezone ? timezone.value : "UTC";
+  const tz = timezone ? timezone.value : "Asia/Jakarta";
   
   // Get time in the specified timezone
   const now = new Date();
@@ -2267,7 +2267,7 @@ app.get("/api/system/time", requireAuth, (req, res) => {
     console.error(`Timezone error for ${tz}:`, e);
     res.json({ 
       serverTime,
-      timezone: "UTC",
+      timezone: "Asia/Jakarta",
       formatted: now.toISOString(),
       currentTime: now.toISOString()
     });
@@ -2710,7 +2710,7 @@ app.use("/profiles", express.static(PROFILES_DIR));
 // --- Background Scheduler Engine ---
 setInterval(() => {
   const timezone = db.prepare("SELECT value FROM settings WHERE key = 'timezone'").get() as any;
-  const tz = timezone ? timezone.value : "UTC";
+  const tz = timezone ? timezone.value : "Asia/Jakarta";
   
   const now = new Date();
   
