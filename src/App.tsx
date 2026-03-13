@@ -45,7 +45,8 @@ import {
   Maximize2,
   ExternalLink,
   Youtube,
-  Wand2
+  Wand2,
+  Image
 } from "lucide-react";
 import { 
   format, 
@@ -911,6 +912,7 @@ const LoginPage = () => {
 const Dashboard = () => {
   const [stats, setStats] = useState({ streams: [], media: [], logs: [] });
   const [systemStats, setSystemStats] = useState<any>(null);
+  const [adminGlobalStats, setAdminGlobalStats] = useState<any>(null);
   const [updateSuccess, setUpdateSuccess] = useState<any>(null);
   const { user } = useAuth();
 
@@ -936,8 +938,12 @@ const Dashboard = () => {
       }
 
       if (user && user.role === 'admin') {
-        const sys = await fetchJson("/api/system/stats", null);
+        const [sys, global] = await Promise.all([
+          fetchJson("/api/system/stats", null),
+          fetchJson("/api/admin/global-stats", null)
+        ]);
         setSystemStats(sys);
+        setAdminGlobalStats(global);
       }
     } catch (err) {
       console.error("Dashboard: Fetch error", err);
@@ -958,6 +964,15 @@ const Dashboard = () => {
   const activeStreams = Array.isArray(stats.streams) ? stats.streams.filter((s: any) => s.status === 'live') : [];
   const mediaCount = Array.isArray(stats.media) ? stats.media.length : 0;
   const logsList = Array.isArray(stats.logs) ? stats.logs : [];
+  const scheduledToday = Array.isArray(stats.streams) ? stats.streams.filter((s: any) => {
+    if (!s.schedule_enabled) return false;
+    const today = new Date().toISOString().slice(0, 10);
+    return s.start_date === today;
+  }).length : 0;
+
+  const displayActiveStreams = (user.role === 'admin' && adminGlobalStats) ? adminGlobalStats.activeStreams : activeStreams.length;
+  const displayMediaCount = (user.role === 'admin' && adminGlobalStats) ? adminGlobalStats.totalMedia : mediaCount;
+  const displayScheduledToday = (user.role === 'admin' && adminGlobalStats) ? adminGlobalStats.scheduledToday : scheduledToday;
 
   return (
     <div className="space-y-8">
@@ -1010,7 +1025,7 @@ const Dashboard = () => {
       </AnimatePresence>
 
       {user.role === 'admin' && systemStats && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
           <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <div className="p-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-xl">
@@ -1071,9 +1086,35 @@ const Dashboard = () => {
           <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <div className="p-3 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-xl">
+                <Globe size={24} />
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded-full uppercase tracking-wider">Real-time</span>
+              </div>
+            </div>
+            <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Network Traffic</p>
+            <div className="mt-2 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1 text-[10px] text-slate-400 font-bold uppercase">
+                  <ArrowDown size={10} className="text-blue-500" /> Down
+                </div>
+                <span className="text-xs font-mono text-slate-700 dark:text-slate-200">{systemStats.network.download} Mbps</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1 text-[10px] text-slate-400 font-bold uppercase">
+                  <ArrowUp size={10} className="text-orange-500" /> Up
+                </div>
+                <span className="text-xs font-mono text-slate-700 dark:text-slate-200">{systemStats.network.upload} Mbps</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl">
                 <Info size={24} />
               </div>
-              <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded-full uppercase tracking-wider">System Info</span>
+              <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 px-2 py-1 rounded-full uppercase tracking-wider">System Info</span>
             </div>
             <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Server Status</p>
             <div className="mt-2 space-y-1">
@@ -1100,7 +1141,7 @@ const Dashboard = () => {
             <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/20 px-2 py-1 rounded-full">LIVE NOW</span>
           </div>
           <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Active Streams</p>
-          <h2 className="text-3xl font-bold text-slate-800 dark:text-white">{activeStreams.length}</h2>
+          <h2 className="text-3xl font-bold text-slate-800 dark:text-white">{displayActiveStreams}</h2>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
@@ -1110,7 +1151,7 @@ const Dashboard = () => {
             </div>
           </div>
           <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Total Media Files</p>
-          <h2 className="text-3xl font-bold text-slate-800 dark:text-white">{mediaCount}</h2>
+          <h2 className="text-3xl font-bold text-slate-800 dark:text-white">{displayMediaCount}</h2>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
@@ -1120,7 +1161,7 @@ const Dashboard = () => {
             </div>
           </div>
           <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">Scheduled Today</p>
-          <h2 className="text-3xl font-bold text-slate-800 dark:text-white">0</h2>
+          <h2 className="text-3xl font-bold text-slate-800 dark:text-white">{displayScheduledToday}</h2>
         </div>
       </div>
 
@@ -1789,16 +1830,61 @@ const Streams = () => {
     youtube_allow_embedding: true,
     youtube_publish_to_subscriptions: true,
     youtube_shorts_remixing: "allow_video_audio",
-    youtube_category: "24",
+    youtube_category: "10",
     youtube_comments_mode: "on",
     youtube_who_can_comment: "anyone",
     youtube_sort_by: "top",
     network_optimization: true,
-    force_encoding: false
+    force_encoding: false,
+    thumbnail_path: ""
   });
 
   const [aiKeywords, setAiKeywords] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isUploadingThumb, setIsUploadingThumb] = useState(false);
+
+  const handleGenerateThumbnail = () => {
+    if (!formData.name) {
+      alert("Please enter a stream title first.");
+      return;
+    }
+    // Copy title to clipboard
+    navigator.clipboard.writeText(formData.name).then(() => {
+      alert("Stream title copied to clipboard! Opening Gemini Canvas...");
+      window.open("https://gemini.google.com/share/53c91fcadaf0", "_blank");
+    }).catch(err => {
+      console.error("Failed to copy title:", err);
+      window.open("https://gemini.google.com/share/53c91fcadaf0", "_blank");
+    });
+  };
+
+  const handleThumbnailUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingThumb(true);
+    const uploadFormData = new FormData();
+    uploadFormData.append("thumbnail", file);
+
+    try {
+      const res = await fetch("/api/streams/thumbnail/upload", {
+        method: "POST",
+        body: uploadFormData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFormData({ ...formData, thumbnail_path: data.filepath });
+        alert("Thumbnail uploaded successfully!");
+      } else {
+        alert(data.error || "Failed to upload thumbnail");
+      }
+    } catch (err) {
+      console.error("Thumbnail upload error:", err);
+      alert("An error occurred while uploading thumbnail");
+    } finally {
+      setIsUploadingThumb(false);
+    }
+  };
 
   const handleAiGenerate = async () => {
     if (!aiKeywords) return;
@@ -1903,7 +1989,8 @@ const Streams = () => {
       youtube_who_can_comment: formData.youtube_who_can_comment,
       youtube_sort_by: formData.youtube_sort_by,
       network_optimization: formData.network_optimization ? 1 : 0,
-      force_encoding: formData.force_encoding ? 1 : 0
+      force_encoding: formData.force_encoding ? 1 : 0,
+      thumbnail_path: formData.thumbnail_path
     };
     
     try {
@@ -1993,12 +2080,13 @@ const Streams = () => {
       youtube_allow_embedding: stream.youtube_allow_embedding === 1,
       youtube_publish_to_subscriptions: stream.youtube_publish_to_subscriptions === 1,
       youtube_shorts_remixing: stream.youtube_shorts_remixing || "allow_video_audio",
-      youtube_category: stream.youtube_category || "24",
+      youtube_category: stream.youtube_category || "10",
       youtube_comments_mode: stream.youtube_comments_mode || "on",
       youtube_who_can_comment: stream.youtube_who_can_comment || "anyone",
       youtube_sort_by: stream.youtube_sort_by || "top",
       network_optimization: stream.network_optimization === 1,
-      force_encoding: stream.force_encoding === 1
+      force_encoding: stream.force_encoding === 1,
+      thumbnail_path: stream.thumbnail_path || ""
     });
     setIsCreating(true);
   };
@@ -2070,12 +2158,13 @@ const Streams = () => {
               youtube_allow_embedding: true,
               youtube_publish_to_subscriptions: true,
               youtube_shorts_remixing: "allow_video_audio",
-              youtube_category: "24",
+              youtube_category: "10",
               youtube_comments_mode: "on",
               youtube_who_can_comment: "anyone",
               youtube_sort_by: "top",
               network_optimization: true,
-              force_encoding: false
+              force_encoding: false,
+              thumbnail_path: ""
             }); 
           }}
           className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all"
@@ -2172,6 +2261,56 @@ const Streams = () => {
                   className="w-full px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 min-h-[42px] resize-none"
                   placeholder="Stream description..."
                 />
+              </div>
+              
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Thumbnail</label>
+                <div className="flex flex-col gap-3">
+                  <div className="flex gap-2">
+                    <button 
+                      type="button"
+                      onClick={handleGenerateThumbnail}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all text-xs"
+                    >
+                      <Image size={16} />
+                      Generate Thumbnail
+                    </button>
+                    <label className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all cursor-pointer text-xs">
+                      {isUploadingThumb ? <RefreshCw size={16} className="animate-spin" /> : <Upload size={16} />}
+                      {formData.thumbnail_path ? 'Change Thumbnail' : 'Upload Thumbnail'}
+                      <input type="file" className="hidden" accept="image/*" onChange={handleThumbnailUpload} disabled={isUploadingThumb} />
+                    </label>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-100 dark:border-slate-800">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Cara Penggunaan Thumbnail:</p>
+                    <ol className="text-[10px] text-slate-500 dark:text-slate-400 space-y-1 list-decimal ml-3">
+                      <li>Klik <b>Generate Thumbnail</b> (Judul otomatis tercopy!)</li>
+                      <li>Paste di kolom <b>Konsep</b> pada Gemini Canvas</li>
+                      <li>Optimalkan prompt & generate thumbnail</li>
+                      <li>Download hasilnya</li>
+                      <li>Kembali ke sini & klik <b>Upload Thumbnail</b></li>
+                    </ol>
+                  </div>
+
+                  {formData.thumbnail_path && (
+                    <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800">
+                      <img 
+                        src={`/thumbnails/${formData.thumbnail_path}`} 
+                        alt="Thumbnail Preview" 
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                      <button 
+                        type="button"
+                        onClick={() => setFormData({...formData, thumbnail_path: ""})}
+                        className="absolute top-2 right-2 p-1.5 bg-red-600 text-white rounded-full shadow-lg hover:bg-red-700 transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Platform</label>
